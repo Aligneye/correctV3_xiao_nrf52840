@@ -5,6 +5,7 @@
 #include "bluetooth_manager.h"
 #include "vibration_therapy.h"
 #include <limits.h>
+#include <math.h>
 
 // ---------------- CONFIGURATION ----------------
 // 2 Minutes (120,000 ms) in milliseconds
@@ -15,15 +16,22 @@ const unsigned long AUTO_OFF_DURATION_MS = 2UL * 60UL * 1000UL;
 // This prevents sensor noise from resetting the timer
 const unsigned long MOTION_DEBOUNCE_MS = 2000UL; // 2 seconds
 
+// Angle change threshold - if angle changes by this much, reset timer
+const float ANGLE_CHANGE_THRESHOLD = 0.5f; // degrees
+
 // ---------------- STATE ----------------
 static unsigned long lastActivityTime = 0;
 static unsigned long motionStartTime = 0;
 static bool wasMoving = false;
+static float lastAngle = 0.0f;
+static bool angleInitialized = false;
 
 void initAutoOff() {
     lastActivityTime = millis();
     motionStartTime = 0;
     wasMoving = false;
+    lastAngle = 0.0f;
+    angleInitialized = false;
     Serial.println("AutoOff: Timer Initialized");
 }
 
@@ -53,7 +61,24 @@ void checkAutoOff() {
         isActive = true;
     }
 
-    // 3. Check Motion with Debouncing
+    // 3. Check Angle Change
+    // If angle changes by 0.5 degrees or more, reset the timer
+    extern float currentAngle; // from posture_training.cpp
+    if (!angleInitialized) {
+        // First time - initialize the angle
+        lastAngle = currentAngle;
+        angleInitialized = true;
+    } else {
+        // Check if angle has changed by threshold
+        float angleDiff = fabs(currentAngle - lastAngle);
+        if (angleDiff >= ANGLE_CHANGE_THRESHOLD) {
+            // Angle changed significantly - reset timer
+            isActive = true;
+            lastAngle = currentAngle; // Update tracked angle
+        }
+    }
+
+    // 4. Check Motion with Debouncing
     // Motion must persist for MOTION_DEBOUNCE_MS to be considered real activity
     bool currentlyMoving = isDeviceMoving();
     
@@ -89,12 +114,13 @@ void checkAutoOff() {
     //     long remaining = (AUTO_OFF_DURATION_MS > elapsed) ? 
     //                     ((AUTO_OFF_DURATION_MS - elapsed) / 1000) : 0;
         
-    //     Serial.printf("AutoOff: %lds left (Active: %d, Moving: %d, BLE: %d, Btn: %d)\n", 
+    //     Serial.printf("AutoOff: %lds left (Active: %d, Moving: %d, BLE: %d, Btn: %d, Angle: %.2f)\n", 
     //                   remaining, 
     //                   isActive, 
     //                   currentlyMoving,
     //                   deviceConnected,
-    //                   lastButtonEvent);
+    //                   lastButtonEvent,
+    //                   currentAngle);
     // }
 
     // ---------------- TRIGGER SLEEP ----------------
