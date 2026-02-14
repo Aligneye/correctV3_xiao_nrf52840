@@ -20,6 +20,7 @@ void resetAllOutputs();
 
 // New Interactions
 void playButtonFeedback(); // Added for button click feedback
+void playLongButtonFeedback(); // Long feedback for power-off action
 void playFailureFeedback(); // Added for failure feedback
 void cycleTherapyDuration();
 void cycleTrainingDelay();

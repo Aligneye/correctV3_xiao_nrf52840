@@ -71,7 +71,11 @@ static void processPendingButtonAction() {
       break;
 
     case ACTION_DOUBLE_CLICK:
-      playButtonFeedback();
+      if (currentMode == TRACKING) {
+        playLongButtonFeedback();
+      } else {
+        playButtonFeedback();
+      }
 
       switch (currentMode) {
         case TRACKING:

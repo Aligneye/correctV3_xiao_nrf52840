@@ -116,6 +116,25 @@ void playButtonFeedback() {
     isProvidingFeedback = false;
 }
 
+// Longer haptic + LED blink used before power-off
+void playLongButtonFeedback() {
+    isProvidingFeedback = true;
+
+    // Temporarily set LED pin to OUTPUT for feedback
+    pinMode(LED_BLUE_PIN, OUTPUT);
+
+    analogWrite(MOTOR_PIN, 255);
+    digitalWrite(LED_BLUE_PIN, LED_ON);
+    delay(HS_LONG_BEEP);
+    analogWrite(MOTOR_PIN, 0);
+    digitalWrite(LED_BLUE_PIN, LED_OFF);
+
+    // Revert to INPUT for Charging Detection
+    pinMode(LED_BLUE_PIN, INPUT_PULLUP);
+
+    isProvidingFeedback = false;
+}
+
 // Long beep for failure feedback
 void playFailureFeedback() {
     isProvidingFeedback = true;
