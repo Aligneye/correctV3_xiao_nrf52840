@@ -50,16 +50,18 @@ bool loadCalibration(float &yOrigin, float &zOrigin) {
 
 #else
 
-#if __has_include(<EEPROM.h>)
-#include <EEPROM.h>
-#define ALIGNEYE_HAS_EEPROM 1
+#if __has_include(<InternalFileSystem.h>)
+#include <Adafruit_LittleFS.h>
+#include <InternalFileSystem.h>
+using namespace Adafruit_LittleFS_Namespace;
+#define ALIGNEYE_HAS_FS 1
 #else
-#define ALIGNEYE_HAS_EEPROM 0
+#define ALIGNEYE_HAS_FS 0
 #endif
 
 namespace {
 constexpr uint32_t SETTINGS_MAGIC = 0x414C474Eu;  // "ALGN"
-constexpr uint16_t SETTINGS_VERSION = 1u;
+constexpr uint16_t SETTINGS_VERSION = 2u; // Bump version for safety
 
 struct PersistedSettings {
     uint32_t magic;
@@ -89,14 +91,18 @@ void sanitizeSettings() {
     }
 }
 
-#if ALIGNEYE_HAS_EEPROM
+#if ALIGNEYE_HAS_FS
 void persistSettings() {
-    EEPROM.put(0, g_settings);
-    EEPROM.commit();
+    InternalFS.remove("/settings.dat"); // Ensure clean write
+    File file = InternalFS.open("/settings.dat", FILE_O_WRITE);
+    if (file) {
+        file.write((uint8_t*)&g_settings, sizeof(g_settings));
+        file.close();
+    }
 }
 #else
 void persistSettings() {
-    // No EEPROM backend available; keep RAM copy only.
+    // No FS backend available; keep RAM copy only.
 }
 #endif
 
@@ -105,17 +111,22 @@ void ensureStorageReady() {
         return;
     }
 
-#if ALIGNEYE_HAS_EEPROM
-    EEPROM.begin(sizeof(PersistedSettings));
-    PersistedSettings loaded{};
-    EEPROM.get(0, loaded);
-
-    if (loaded.magic == SETTINGS_MAGIC && loaded.version == SETTINGS_VERSION) {
-        g_settings = loaded;
-        sanitizeSettings();
-        g_loadedFromStorage = true;
-    } else {
-        g_loadedFromStorage = false;
+#if ALIGNEYE_HAS_FS
+    InternalFS.begin();
+    File file = InternalFS.open("/settings.dat", FILE_O_READ);
+    if (file) {
+        PersistedSettings loaded{};
+        if (file.read(&loaded, sizeof(loaded)) == sizeof(loaded)) {
+            if (loaded.magic == SETTINGS_MAGIC && loaded.version == SETTINGS_VERSION) {
+                g_settings = loaded;
+                sanitizeSettings();
+                g_loadedFromStorage = true;
+            }
+        }
+        file.close();
+    }
+    
+    if (!g_loadedFromStorage) {
         persistSettings();
     }
 #else

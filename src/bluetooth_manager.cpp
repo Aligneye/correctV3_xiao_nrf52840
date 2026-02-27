@@ -214,9 +214,8 @@ void initBLE() {
 
     gCharacteristic.setProperties(
         CHR_PROPS_NOTIFY | CHR_PROPS_READ | CHR_PROPS_WRITE | CHR_PROPS_WRITE_WO_RESP);
-    // Enforce encrypted access so the central triggers BLE pairing/bonding.
     gCharacteristic.setPermission(SECMODE_ENC_NO_MITM, SECMODE_ENC_NO_MITM);
-    gCharacteristic.setMaxLen(320);
+    gCharacteristic.setMaxLen(512); // Increased from 320 to handle larger JSON payloads
     gCharacteristic.setWriteCallback(onCharacteristicWrite);
     gCharacteristic.begin();
     gCharacteristic.write("{}");
@@ -303,7 +302,14 @@ void sendBLE() {
 
   json += "\"cal_y\":" + String(Y_ORIGIN, 2) + ",";
   json += "\"cal_z\":" + String(Z_ORIGIN, 2) + ",";
-  json += "\"is_calibrating\":" + String(isCalibrating() ? "true" : "false") + ",";
+
+  bool calibrating = isCalibrating();
+  unsigned long calibElapsedMs = getCalibrationElapsedMs();
+  unsigned long calibTotalMs = getCalibrationTotalMs();
+  json += "\"is_calibrating\":" + String(calibrating ? "true" : "false") + ",";
+  json += "\"c_phase\":\"" + String(getCalibrationPhase()) + "\",";
+  json += "\"c_elap\":" + String(calibElapsedMs) + ",";
+  json += "\"c_tot\":" + String(calibTotalMs) + ",";
 
   json += "\"posture\":\"" + postureText + "\",";
   json += "\"is_bad_posture\":" + String(isBadPosture ? "true" : "false") + ",";
@@ -314,10 +320,10 @@ void sendBLE() {
   if (currentMode == THERAPY) {
     unsigned long therapyRemainingSec = (getTherapyRemainingMs() + 999UL) / 1000UL;
     unsigned long therapyElapsedSec = getTherapyElapsedMs() / 1000UL;
-    json += ",\"therapy_pattern\":\"" + String(getCurrentPatternName()) + "\"";
-    json += ",\"therapy_next_pattern\":\"" + String(getNextPatternName()) + "\"";
-    json += ",\"therapy_elapsed_sec\":" + String(therapyElapsedSec);
-    json += ",\"therapy_remaining_sec\":" + String(therapyRemainingSec);
+    json += ",\"t_patt\":\"" + String(getCurrentPatternName()) + "\"";
+    json += ",\"t_next\":\"" + String(getNextPatternName()) + "\"";
+    json += ",\"t_elap\":" + String(therapyElapsedSec);
+    json += ",\"t_rem\":" + String(therapyRemainingSec);
   }
 
   json += "}";
@@ -334,3 +340,5 @@ void sendBLE() {
   // Print JSON to Serial as requested
   Serial.println(json);
 }
+
+

@@ -17,16 +17,16 @@ bool countdownVib = false;
 #define VIB_WAVE_MIN 130
 #define VIB_WAVE_MAX 180
 
-// Pattern names for BLE
+// Pattern names for BLE (Shortened to fit in 320 byte BLE payloads)
 const char* PATTERN_NAMES[] = {
-  "Muscle Activation",
-  "Reverse Ramp",
-  "Ramp Pattern",
-  "Wave Therapy",
-  "Slow Wave Massage",
-  "Sinusoidal Wave",
-  "Triangle Wave",
-  "Double Wave",
+  "Muscle Act",
+  "Rev Ramp",
+  "Ramp",
+  "Wave",
+  "Slow Wave",
+  "Sine Wave",
+  "Triangle",
+  "Dbl Wave",
   "Anti-Fatigue",
   "Pulse Ramp"
 };
@@ -135,7 +135,6 @@ void playLongButtonFeedback() {
     isProvidingFeedback = false;
 }
 
-// Long beep for failure feedback
 void playFailureFeedback() {
     isProvidingFeedback = true;
     analogWrite(MOTOR_PIN, VIB_INTENSITY_HIGH);
@@ -143,6 +142,25 @@ void playFailureFeedback() {
     delay(1200); // long failure feedback
     analogWrite(MOTOR_PIN, 0); 
     digitalWrite(LED_ERROR_PIN, LED_OFF);
+    isProvidingFeedback = false;
+}
+
+void playCalibrationFeedback(bool isStart) {
+    isProvidingFeedback = true;
+    pinMode(LED_BLUE_PIN, OUTPUT); 
+    
+    analogWrite(MOTOR_PIN, VIB_INTENSITY_MAX); // MAX intensity
+    digitalWrite(LED_BLUE_PIN, LED_ON);
+    
+    delay(150); // The user requested the start and success beeps to be the same length
+    
+    analogWrite(MOTOR_PIN, 0); // Stop Motor
+    delay(60); // Keep LED on briefly for visibility
+    digitalWrite(LED_BLUE_PIN, LED_OFF);
+    
+    // Revert to INPUT for Charging Detection
+    pinMode(LED_BLUE_PIN, INPUT_PULLUP);
+    
     isProvidingFeedback = false;
 }
 
@@ -154,12 +172,14 @@ void setTrackingMode() {
   playButtonFeedback(); // Feedback on mode switch
 }
 
-void setTrainingMode() {
+void setTrainingMode(bool silent) {
   Serial.println("Posture TRAINING");
   currentMode = TRAINING;
   therapyState = THERAPY_IDLE;
   resetAllOutputs();
-  playButtonFeedback(); // Feedback on mode switch
+  if (!silent) {
+      playButtonFeedback(); // Feedback on mode switch
+  }
 }
 
 void setTherapyMode() {

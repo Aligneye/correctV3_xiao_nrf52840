@@ -2,7 +2,7 @@
 #include <Arduino.h>
 
 void setTrackingMode();
-void setTrainingMode();
+void setTrainingMode(bool silent = false);
 void setTherapyMode();
 
 void handleTracking();
@@ -22,6 +22,7 @@ void resetAllOutputs();
 void playButtonFeedback(); // Added for button click feedback
 void playLongButtonFeedback(); // Long feedback for power-off action
 void playFailureFeedback(); // Added for failure feedback
+void playCalibrationFeedback(bool isStart); // Max intensity calibration feedback
 void cycleTherapyDuration();
 void cycleTrainingDelay();
 

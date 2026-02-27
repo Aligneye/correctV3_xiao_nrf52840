@@ -162,7 +162,8 @@ void loop() {
   // updateHaptics(millis()); // Removed
 
   if (isCalibrating()) {
-     // Skip normal logic during calibration
+     // Keep BLE updates flowing so the app can sync calibration progress.
+     sendBLE();
      feedWatchdog();
      return; 
   }
@@ -188,3 +189,4 @@ void loop() {
     case THERAPY:  handleTherapy(now); break;
   }
 }
+

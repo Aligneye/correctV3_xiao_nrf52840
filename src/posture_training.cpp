@@ -17,12 +17,22 @@ static void loadStoredCalibration() {
     float loadedY = 6.75f;
     float loadedZ = 6.75f;
     loadCalibration(loadedY, loadedZ);
+    // Safety check: avoid (0,0) vector
+    if (fabs(loadedY) < 0.1f && fabs(loadedZ) < 0.1f) {
+        loadedY = 6.75f;
+        loadedZ = 6.75f;
+    }
     Y_ORIGIN = loadedY;
     Z_ORIGIN = loadedZ;
     Serial.printf("CALIB LOADED -> Y:%.2f Z:%.2f\n", Y_ORIGIN, Z_ORIGIN);
 }
 
 void setPostureOrigin(float y, float z) {
+    if (fabs(y) < 0.1f && fabs(z) < 0.1f) {
+        // Prevent (0,0) origin to avoid atan2 singularities and wildly swinging angles
+        y = 6.75f; 
+        z = 6.75f;
+    }
     Y_ORIGIN = fabs(y);
     Z_ORIGIN = z;
 
