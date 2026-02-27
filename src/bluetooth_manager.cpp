@@ -38,17 +38,23 @@ static void applyTrainingTiming(const String &valueRaw) {
   value.toUpperCase();
 
   if (value == "INSTANT") {
-    currentTrainingDelay = TRAIN_INSTANT;
-    saveTrainingDelay(currentTrainingDelay);
-    Serial.println("BLE CMD: POSTURE_TIMING=INSTANT");
+    if (currentTrainingDelay != TRAIN_INSTANT) {
+      currentTrainingDelay = TRAIN_INSTANT;
+      saveTrainingDelay(currentTrainingDelay);
+      Serial.println("BLE CMD: POSTURE_TIMING=INSTANT");
+    }
   } else if (value == "DELAYED") {
-    currentTrainingDelay = TRAIN_DELAYED;
-    saveTrainingDelay(currentTrainingDelay);
-    Serial.println("BLE CMD: POSTURE_TIMING=DELAYED");
+    if (currentTrainingDelay != TRAIN_DELAYED) {
+      currentTrainingDelay = TRAIN_DELAYED;
+      saveTrainingDelay(currentTrainingDelay);
+      Serial.println("BLE CMD: POSTURE_TIMING=DELAYED");
+    }
   } else if (value == "AUTOMATIC") {
-    currentTrainingDelay = TRAIN_AUTOMATIC;
-    saveTrainingDelay(currentTrainingDelay);
-    Serial.println("BLE CMD: POSTURE_TIMING=AUTOMATIC");
+    if (currentTrainingDelay != TRAIN_AUTOMATIC) {
+      currentTrainingDelay = TRAIN_AUTOMATIC;
+      saveTrainingDelay(currentTrainingDelay);
+      Serial.println("BLE CMD: POSTURE_TIMING=AUTOMATIC");
+    }
   }
 }
 
@@ -75,14 +81,20 @@ static void applyMode(const String &valueRaw) {
   value.toUpperCase();
 
   if (value == "TRACKING") {
-    setTrackingMode();
-    Serial.println("BLE CMD: MODE=TRACKING");
+    if (currentMode != TRACKING) {
+      setTrackingMode();
+      Serial.println("BLE CMD: MODE=TRACKING");
+    }
   } else if (value == "TRAINING" || value == "POSTURE") {
-    setTrainingMode();
-    Serial.println("BLE CMD: MODE=TRAINING");
+    if (currentMode != TRAINING) {
+      setTrainingMode();
+      Serial.println("BLE CMD: MODE=TRAINING");
+    }
   } else if (value == "THERAPY") {
-    setTherapyMode();
-    Serial.println("BLE CMD: MODE=THERAPY");
+    if (currentMode != THERAPY) {
+      setTherapyMode();
+      Serial.println("BLE CMD: MODE=THERAPY");
+    }
   }
 }
 
