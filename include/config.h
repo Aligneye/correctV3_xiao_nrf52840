@@ -1,6 +1,10 @@
 #pragma once
 #include <Arduino.h>
-#include "esp_sleep.h"
+
+// Keep source-compatible declarations across MCU families.
+#ifndef RTC_DATA_ATTR
+#define RTC_DATA_ATTR
+#endif
 
 /******** PINS ********/
 /******** PINS ********/
@@ -11,14 +15,15 @@
 #define SCL_PIN     D5
 #define SDA_PIN     D4
 
-// Charging Status Inputs (Shared with LEDs)
-#define PIN_CHARGING     D8 // Low = Charging
-#define PIN_FULL_CHARGE  D9 // Low = Full Charge
+// RGB LED pins for XIAO nRF52840
+#define LED_RED_PIN    D8
+#define LED_GREEN_PIN  D9
+#define LED_BLUE_PIN   D10
 
-// Also used as LEDs (if not charging)
-#define LED_GREEN_PIN PIN_CHARGING
-#define LED_BLUE_PIN  PIN_FULL_CHARGE
-#define LED_RED_PIN   D10
+// Charging status inputs are shared with LED lines.
+// Keep this mapping so existing battery logic remains unchanged.
+#define PIN_CHARGING     LED_GREEN_PIN // Low = Charging
+#define PIN_FULL_CHARGE  LED_BLUE_PIN  // Low = Full Charge
 
 // Active Low Logic
 #define LED_ON  LOW

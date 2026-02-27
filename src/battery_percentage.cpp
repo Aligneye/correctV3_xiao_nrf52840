@@ -1,16 +1,17 @@
 #include "battery_percentage.h"
 #include <Arduino.h>
-#include <numeric>
+#include "autoOff.h"
 
 // Configuration
 #define BATTERY_DIVIDER_RATIO 2.0f      // 2x 220k resistors
-#define BATTERY_REF_VOLTAGE   3.3f      // ESP32-C3 Reference Voltage
+#define BATTERY_REF_VOLTAGE   3.3f      // XIAO board ADC reference
 #define BATTERY_ADC_RESOLUTION 4096.0f
 
-// Calibration Factor gathered from real-world testing
-// User reported: Real 3.65V, Measured 3.97V
-// Factor = 3.65 / 3.97 = 0.919395
-#define BATTERY_CALIBRATION_FACTOR 0.9194f 
+// Calibration factor tuned from current hardware readings:
+// Firmware measured 3.47V while multimeter measured 4.15V.
+// Needed correction = 4.15 / 3.47 = 1.195965.
+// Previous factor was 0.9194, so updated factor ~= 0.9194 * 1.195965 = 1.0993.
+#define BATTERY_CALIBRATION_FACTOR 1.0993f
 
 // Li-ion Curve Lookup Table (Voltage -> Percentage)
 struct VoltageMap {
@@ -18,20 +19,22 @@ struct VoltageMap {
     int percentage;
 };
 
-// Conservative mapping for 3.7V LiPo
+// Typical Li-ion discharge profile (light load).
 const VoltageMap LI_ION_LUT[] = {
-    {4.15, 100},
-    {4.00, 90},
-    {3.90, 80},
-    {3.80, 70},
-    {3.70, 60},
-    {3.60, 50},
-    {3.50, 40},
-    {3.40, 30},
-    {3.35, 20},
-    {3.30, 10},
-    {3.20, 0}
+    {4.20f, 100},
+    {4.15f, 95},
+    {4.10f, 90},
+    {4.00f, 80},
+    {3.92f, 70},
+    {3.85f, 60},
+    {3.79f, 50},
+    {3.73f, 40},
+    {3.68f, 30},
+    {3.55f, 20},
+    {3.40f, 10},
+    {3.25f, 0}
 };
+const int LUT_SIZE = sizeof(LI_ION_LUT) / sizeof(LI_ION_LUT[0]);
 
 // State Variables
 int currentBatteryPercent = 100;
@@ -41,8 +44,6 @@ float currentVoltage = 4.2f;
 const int SAMPLE_COUNT = 20;
 float voltageSamples[SAMPLE_COUNT];
 int sampleIndex = 0;
-bool bufferFilled = false;
-
 // Hysteresis & Snapping
 int displayedPercent = -1; 
 unsigned long lastUpdateMs = 0;
@@ -59,16 +60,32 @@ bool lowBatteryTimerActive = false;
 const unsigned long LOW_BATTERY_SHUTDOWN_TIME_MS = 5000; 
 
 float getRawVoltage() {
-    uint32_t raw = analogRead(BATTERY_PIN);
+    // Average multiple ADC reads and drop extremes to reduce jitter.
+    const int RAW_SAMPLE_COUNT = 15;
+    uint32_t minRaw = 0xFFFFFFFFu;
+    uint32_t maxRaw = 0;
+    uint32_t sumRaw = 0;
+
+    for (int i = 0; i < RAW_SAMPLE_COUNT; i++) {
+        uint32_t raw = analogRead(BATTERY_PIN);
+        if (raw < minRaw) minRaw = raw;
+        if (raw > maxRaw) maxRaw = raw;
+        sumRaw += raw;
+        delayMicroseconds(200);
+    }
+
+    uint32_t filteredRaw = (sumRaw - minRaw - maxRaw) / (RAW_SAMPLE_COUNT - 2);
+
+    float raw = (float)filteredRaw;
     float val = (raw / BATTERY_ADC_RESOLUTION) * BATTERY_REF_VOLTAGE * BATTERY_DIVIDER_RATIO;
     return val * BATTERY_CALIBRATION_FACTOR;
 }
 
 int mapVoltageToPercent(float voltage) {
     if (voltage >= LI_ION_LUT[0].voltage) return 100;
-    if (voltage <= LI_ION_LUT[10].voltage) return 0;
+    if (voltage <= LI_ION_LUT[LUT_SIZE - 1].voltage) return 0;
 
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < LUT_SIZE - 1; i++) {
         if (voltage <= LI_ION_LUT[i].voltage && voltage > LI_ION_LUT[i+1].voltage) {
             float vHigh = LI_ION_LUT[i].voltage;
             float vLow = LI_ION_LUT[i+1].voltage;
@@ -76,15 +93,24 @@ int mapVoltageToPercent(float voltage) {
             int pLow = LI_ION_LUT[i+1].percentage;
 
             float fraction = (voltage - vLow) / (vHigh - vLow);
-            return pLow + (int)(fraction * (pHigh - pLow));
+            int interp = pLow + (int)(fraction * (pHigh - pLow) + 0.5f);
+            if (interp < 0) return 0;
+            if (interp > 100) return 100;
+            return interp;
         }
     }
     return 0;
 }
 
 void initBattery() {
+#if defined(ARDUINO_ARCH_ESP32)
     analogReadResolution(12);
     analogSetAttenuation(ADC_11db);
+#else
+    analogReadResolution(12);
+#endif
+
+    pinMode(BATTERY_PIN, INPUT);
 
     float initialV = getRawVoltage();
     for (int i = 0; i < SAMPLE_COUNT; i++) {
@@ -95,7 +121,7 @@ void initBattery() {
     // Initial run to set state immediately
     currentBatteryPercent = mapVoltageToPercent(currentVoltage);
     // Snap to nearest 5
-    currentBatteryPercent = (currentBatteryPercent / 5) * 5;
+    currentBatteryPercent = ((currentBatteryPercent + 2) / 5) * 5;
     displayedPercent = currentBatteryPercent;
 }
 
@@ -134,10 +160,8 @@ void updateBattery() {
     if (lock100) rawPercent = 100;
 
     // 5. Snapping and Hysteresis
-    // Target is the nearest 5% step below or equal
-    // But we implement hysteresis to avoid flutter.
-    
-    int snappedTarget = (rawPercent / 5) * 5;
+    // Target is the nearest 5% step, then hysteresis avoids flutter.
+    int snappedTarget = ((rawPercent + 2) / 5) * 5;
 
     // Charging Detection (Active Low inputs)
     bool isCharging = (digitalRead(PIN_CHARGING) == LOW);
@@ -151,17 +175,15 @@ void updateBattery() {
     if (displayedPercent == -1) {
         displayedPercent = snappedTarget;
     } else {
-        // Hysteresis buffer
-        const int HYSTERESIS_BUFFER = 2; // 2% buffer
+        // Balanced hysteresis for both rise and fall transitions.
+        const int HYSTERESIS_BUFFER = 2;
 
         if (snappedTarget > displayedPercent) {
-             // Rising
-             if (rawPercent >= (displayedPercent + 5 + HYSTERESIS_BUFFER)) {
+             if (rawPercent >= (displayedPercent + 5 - HYSTERESIS_BUFFER)) {
                  displayedPercent = snappedTarget;
              }
         } else if (snappedTarget < displayedPercent) {
-             // Falling
-             if (rawPercent <= (displayedPercent - 3)) { 
+             if (rawPercent <= (displayedPercent - 5 + HYSTERESIS_BUFFER)) {
                  displayedPercent = snappedTarget;
              }
         }
@@ -188,7 +210,7 @@ void updateBattery() {
         } else if (now - lowBatteryTimerStart > LOW_BATTERY_SHUTDOWN_TIME_MS) {
             Serial.println("CRITICAL BATTERY: Shutting down...");
             Serial.flush();
-            esp_deep_sleep_start();
+            powerOff();
         }
     } else {
         lowBatteryTimerActive = false;

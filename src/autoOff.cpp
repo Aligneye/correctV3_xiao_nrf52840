@@ -7,6 +7,17 @@
 #include <limits.h>
 #include <math.h>
 
+#if defined(ARDUINO_ARCH_ESP32)
+#include "esp_sleep.h"
+#else
+#include <nrf.h>
+#include <nrf_gpio.h>
+#include "wiring_constants.h"
+#if __has_include(<nrf_soc.h>)
+#include <nrf_soc.h>
+#endif
+#endif
+
 // ---------------- CONFIGURATION ----------------
 // 2 Minutes (120,000 ms) in milliseconds
 // Use UL to ensure unsigned long arithmetic
@@ -25,6 +36,20 @@ static unsigned long motionStartTime = 0;
 static bool wasMoving = false;
 static float lastAngle = 0.0f;
 static bool angleInitialized = false;
+
+static void releaseBuiltInLedsForSleep() {
+  // XIAO nRF52840 has onboard RGB LED pins (D11/D12/D13 on this variant).
+  // Put them in high-impedance mode before sleep so the MCU is not driving them.
+#if defined(LED_RED)
+  pinMode(LED_RED, INPUT);
+#endif
+#if defined(LED_GREEN)
+  pinMode(LED_GREEN, INPUT);
+#endif
+#if defined(LED_BLUE)
+  pinMode(LED_BLUE, INPUT);
+#endif
+}
 
 void initAutoOff() {
     lastActivityTime = millis();
@@ -156,23 +181,39 @@ void powerOff() {
   // 2. Shutdown Peripherals
   resetAllOutputs();    // Turn off Motor & LED
   sleepPostureSensor(); // Put LIS3DH into Power-Down mode (0.5uA)
+  releaseBuiltInLedsForSleep();
 
   // 3. Update State
   currentState = POWER_OFF;
 
-  // 4. Configure Wake source
-  // Pull-up is needed if the button pulls to GND. 
-  // If your design has external pull-up, use ESP_GPIO_WAKEUP_GPIO_LOW only.
-  // Assuming Internal Pull-up is safer for generic dev boards.
-  // Convert Arduino pin index to GPIO number before building wake mask.
+  // 4. Configure Wake source (button active-low)
+#if defined(ARDUINO_ARCH_ESP32)
   uint8_t buttonGpio = digitalPinToGPIONumber(BUTTON_PIN);
   uint64_t buttonWakeMask = (1ULL << buttonGpio);
   esp_deep_sleep_enable_gpio_wakeup(buttonWakeMask, ESP_GPIO_WAKEUP_GPIO_LOW);
+#else
+  uint32_t buttonGpio = g_ADigitalPinMap[BUTTON_PIN];
+  nrf_gpio_cfg_sense_input(buttonGpio, NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
+#endif
 
   // 5. Short Delay & Go to Sleep
   // Delay allows Serial buffer to flush and power rails to settle.
   delay(100); 
+#if defined(ARDUINO_ARCH_ESP32)
   esp_deep_sleep_start();
+#else
+#if defined(SOFTDEVICE_PRESENT)
+  uint8_t sdEnabled = 0;
+  if (sd_softdevice_is_enabled(&sdEnabled) == NRF_SUCCESS && sdEnabled) {
+    (void)sd_power_system_off();
+  }
+#endif
+  NRF_POWER->SYSTEMOFF = 1;
+  __DSB();
+  while (1) {
+    __WFE();
+  }
+#endif
   
   // Code should never reach here
 }

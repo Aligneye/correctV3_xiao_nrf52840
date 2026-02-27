@@ -5,3 +5,6 @@
 void initStorage();
 void saveTrainingDelay(TrainingDelay delay);
 TrainingDelay loadTrainingDelay();
+
+void saveCalibration(float yOrigin, float zOrigin);
+bool loadCalibration(float &yOrigin, float &zOrigin);

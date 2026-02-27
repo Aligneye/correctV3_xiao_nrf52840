@@ -1,37 +1,36 @@
 #include "bluetooth_manager.h"
 #include "config.h"
 #include <Arduino.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
-#include "esp_bt_main.h"
-#include "esp_bt_device.h"
+#include <bluefruit.h>
+#include <math.h>
+
 #include "calibration.h"
 #include "posture_training.h"
-#include "vibration_therapy.h" // Needed for feedback
+#include "vibration_therapy.h"
 #include "battery_percentage.h"
 #include "storage_manager.h"
 
-// Device name and UUIDs from config.h (BLE_DEVICE_NAME, BLE_SERVICE_UUID, BLE_CHARACTERISTIC_UUID)
-
-static BLEServer *pServer = nullptr;
+// Device name and UUIDs are sourced from config.h
+static BLEService gService(BLE_SERVICE_UUID);
+static BLECharacteristic gCharacteristic(BLE_CHARACTERISTIC_UUID);
 static BLECharacteristic *pCharacteristic = nullptr;
 volatile bool deviceConnected = false;
+static bool bleInitialized = false;
 
-class MyServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer *) override {
-    deviceConnected = true;
-    Serial.println("BLE Connected");
-    playButtonFeedback(); // Feedback on connect
-  }
-  void onDisconnect(BLEServer *) override {
-    deviceConnected = false;
-    Serial.println("BLE Disconnected");
-    playButtonFeedback(); // Feedback on disconnect
-    BLEDevice::startAdvertising();
-  }
-};
+static void startAdvertising();
+
+static void onBleConnect(uint16_t) {
+  deviceConnected = true;
+  Serial.println("BLE Connected");
+  playButtonFeedback(); // Feedback on connect
+}
+
+static void onBleDisconnect(uint16_t, uint8_t) {
+  deviceConnected = false;
+  Serial.println("BLE Disconnected");
+  playButtonFeedback(); // Feedback on disconnect
+  startAdvertising();
+}
 
 static void applyTrainingTiming(const String &valueRaw) {
   String value = valueRaw;
@@ -127,7 +126,8 @@ static void parseAndApplyBleCommand(const String &payloadRaw) {
 
   String requestedMode = "";
   int start = 0;
-  while (start < payload.length()) {
+  int payloadLen = payload.length();
+  while (start < payloadLen) {
     int end = payload.indexOf(';', start);
     if (end < 0) {
       end = payload.length();
@@ -166,75 +166,84 @@ static void parseAndApplyBleCommand(const String &payloadRaw) {
   }
 }
 
-class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *characteristic) override {
-    std::string raw = characteristic->getValue();
-    if (raw.empty()) {
-      return;
-    }
-
-    String payload = String(raw.c_str());
-    Serial.print("BLE RX CMD: ");
-    Serial.println(payload);
-    parseAndApplyBleCommand(payload);
+static void onCharacteristicWrite(uint16_t, BLECharacteristic *, uint8_t *data, uint16_t len) {
+  if (data == nullptr || len == 0) {
+    return;
   }
-};
+
+  String payload;
+  payload.reserve(len);
+  for (uint16_t i = 0; i < len; i++) {
+    payload += (char)data[i];
+  }
+
+  Serial.print("BLE RX CMD: ");
+  Serial.println(payload);
+  parseAndApplyBleCommand(payload);
+}
+
+static void startAdvertising() {
+  Bluefruit.Advertising.stop();
+  Bluefruit.Advertising.clearData();
+  Bluefruit.ScanResponse.clearData();
+
+  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
+  Bluefruit.Advertising.addTxPower();
+  Bluefruit.Advertising.addService(gService);
+  Bluefruit.ScanResponse.addName();
+
+  Bluefruit.Advertising.restartOnDisconnect(true);
+  Bluefruit.Advertising.setInterval(32, 244); // 20ms fast, 152.5ms slow
+  Bluefruit.Advertising.setFastTimeout(30);
+  Bluefruit.Advertising.start(0); // Advertise forever
+}
 
 void initBLE() {
-  // Single source of truth: device name from config (e.g. "AlignEye v1") so the mobile app always sees the correct name.
   Serial.print("Initializing BLE as: ");
   Serial.println(BLE_DEVICE_NAME);
 
-  BLEDevice::init(BLE_DEVICE_NAME);
-  
-  // NOTE:
-  // Your mobile app is having trouble connecting when we FORCE encrypted read/notify.
-  // For reliability, start with NO forced bonding/encryption. Once stable, we can add pairing back.
+  if (!bleInitialized) {
+    Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
+    Bluefruit.begin(1, 0);
+    Bluefruit.setName(BLE_DEVICE_NAME);
+    Bluefruit.setTxPower(4); // dBm
+    Bluefruit.Periph.setConnectCallback(onBleConnect);
+    Bluefruit.Periph.setDisconnectCallback(onBleDisconnect);
 
-  pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
+    gService.begin();
 
-  BLEService *service = pServer->createService(BLE_SERVICE_UUID);
+    gCharacteristic.setProperties(
+        CHR_PROPS_NOTIFY | CHR_PROPS_READ | CHR_PROPS_WRITE | CHR_PROPS_WRITE_WO_RESP);
+    // Enforce encrypted access so the central triggers BLE pairing/bonding.
+    gCharacteristic.setPermission(SECMODE_ENC_NO_MITM, SECMODE_ENC_NO_MITM);
+    gCharacteristic.setMaxLen(320);
+    gCharacteristic.setWriteCallback(onCharacteristicWrite);
+    gCharacteristic.begin();
+    gCharacteristic.write("{}");
 
-  pCharacteristic = service->createCharacteristic(
-      BLE_CHARACTERISTIC_UUID,
-      BLECharacteristic::PROPERTY_NOTIFY |
-      BLECharacteristic::PROPERTY_READ |
-      BLECharacteristic::PROPERTY_WRITE |
-      BLECharacteristic::PROPERTY_WRITE_NR
-  );
+    pCharacteristic = &gCharacteristic;
+    bleInitialized = true;
+  }
 
-  // Allow read/notify/write without encryption for compatibility.
-  pCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE);
-  pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
-  pCharacteristic->addDescriptor(new BLE2902());
-
-  service->start();
-
-  // Advertising: service UUID + scan response so name and services are visible to scanners
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(BLE_SERVICE_UUID);
-  pAdvertising->setScanResponse(true);
-  pAdvertising->setMinPreferred(0x06);
-  pAdvertising->setMinPreferred(0x12);
-
-  BLEDevice::startAdvertising();
-
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_P3);
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P3);
-  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, ESP_PWR_LVL_P3);
+  startAdvertising();
 }
 
 void deinitBLE() {
-  if (pServer) {
-    pServer->getAdvertising()->stop();
+  if (!bleInitialized) {
+    return;
   }
-  BLEDevice::deinit(true);
-  btStop();
+
+  Bluefruit.Advertising.stop();
+
+  for (uint16_t conn = 0; conn < BLE_MAX_CONNECTION; conn++) {
+    BLEConnection *connection = Bluefruit.Connection(conn);
+    if (connection != nullptr && connection->connected()) {
+      connection->disconnect();
+    }
+  }
+
   deviceConnected = false;
-  pCharacteristic = nullptr;
-  pServer = nullptr;
-  delay(500); // Allow time for radio shutdown
+  delay(200); // Allow time for radio shutdown
 }
 
 void sendBLE() {
@@ -243,19 +252,20 @@ void sendBLE() {
   }
 
   static unsigned long last = 0;
-  
-  if (millis() - last < 500) 
+
+  if (millis() - last < 500) {
     return;
-    
+  }
+
   last = millis();
 
   // --- Calculate Individual Angles (in degrees) ---
   // Angle X: Inclination of X axis
   float ang_x = atan2(rawX, sqrt(rawY * rawY + rawZ * rawZ)) * 180.0 / PI;
-  
+
   // Angle Y: Inclination of Y axis
   float ang_y = atan2(rawY, sqrt(rawX * rawX + rawZ * rawZ)) * 180.0 / PI;
-  
+
   // Angle Z: Inclination of Z axis from vertical (Z-axis)
   // Note: Standard tilt angle. If Z is up (1g), angle is 0. If Z is horizontal (0g), angle is 90.
   float ang_z = atan2(sqrt(rawX * rawX + rawY * rawY), rawZ) * 180.0 / PI;
@@ -263,40 +273,43 @@ void sendBLE() {
   // --- Sub-modes ---
   String subMode = "";
   if (currentMode == TRACKING) {
-     subMode = "INSTANT"; 
+    subMode = "INSTANT";
   } else if (currentMode == TRAINING) {
-     subMode = (currentTrainingDelay == TRAIN_INSTANT) ? "INSTANT" :
-               (currentTrainingDelay == TRAIN_DELAYED) ? "DELAYED" : "AUTOMATIC";
+    subMode = (currentTrainingDelay == TRAIN_INSTANT)
+                  ? "INSTANT"
+                  : (currentTrainingDelay == TRAIN_DELAYED) ? "DELAYED" : "AUTOMATIC";
   } else if (currentMode == THERAPY) {
-     subMode = String(therapyDuration / 60000) + " MIN"; 
+    subMode = String(therapyDuration / 60000) + " MIN";
   }
 
   // --- JSON Construction ---
   String json = "{";
-  json += "\"mode\":\"" + String(currentMode == TRACKING ? "TRACKING" : currentMode == TRAINING ? "TRAINING" : "THERAPY") + "\",";
+  json += "\"mode\":\"" +
+          String(currentMode == TRACKING ? "TRACKING" : currentMode == TRAINING ? "TRAINING" : "THERAPY") +
+          "\",";
   json += "\"sub_mode\":\"" + subMode + "\",";
-  
+
   json += "\"angle\":" + String(currentAngle, 2) + ",";
-  
+
   // Raw G-Force
   json += "\"raw_x_g\":" + String(rawX, 2) + ",";
   json += "\"raw_y_g\":" + String(rawY, 2) + ",";
   json += "\"raw_z_g\":" + String(rawZ, 2) + ",";
-  
+
   // Converted Angles
   json += "\"angle_x\":" + String(ang_x, 1) + ",";
   json += "\"angle_y\":" + String(ang_y, 1) + ",";
   json += "\"angle_z\":" + String(ang_z, 1) + ",";
-  
+
   json += "\"cal_y\":" + String(Y_ORIGIN, 2) + ",";
   json += "\"cal_z\":" + String(Z_ORIGIN, 2) + ",";
   json += "\"is_calibrating\":" + String(isCalibrating() ? "true" : "false") + ",";
-  
+
   json += "\"posture\":\"" + postureText + "\",";
   json += "\"is_bad_posture\":" + String(isBadPosture ? "true" : "false") + ",";
   json += "\"battery_voltage\":" + String(getBatteryVoltage(), 2) + ",";
   json += "\"battery_percentage\":" + String(getBatteryPercentage());
-  
+
   // Add therapy pattern names if in therapy mode
   if (currentMode == THERAPY) {
     unsigned long therapyRemainingSec = (getTherapyRemainingMs() + 999UL) / 1000UL;
@@ -306,14 +319,14 @@ void sendBLE() {
     json += ",\"therapy_elapsed_sec\":" + String(therapyElapsedSec);
     json += ",\"therapy_remaining_sec\":" + String(therapyRemainingSec);
   }
-  
+
   json += "}";
 
   // Send if connected
   if (deviceConnected) {
-    pCharacteristic->setValue(json.c_str());
-    pCharacteristic->notify();
-    Serial.print("[BLE SENT] ");
+    pCharacteristic->write(json.c_str());
+    bool sent = pCharacteristic->notify(json.c_str());
+    Serial.print(sent ? "[BLE SENT] " : "[BLE BUSY] ");
   } else {
     Serial.print("[WAITING]  ");
   }

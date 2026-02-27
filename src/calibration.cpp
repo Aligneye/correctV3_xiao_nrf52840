@@ -8,7 +8,6 @@ extern Adafruit_LIS3DH lis; // From posture_training.cpp
 
 enum CalibState { CALIB_IDLE, CALIB_COUNTDOWN, CALIB_HOLD, CALIB_FINISH };
 static CalibState calibState = CALIB_IDLE;
-static unsigned long calibStartTime = 0; // Legacy variable, keeping for safety if referenced elsewhere, though not used in new logic
 
 // Calibration variables (Averaging)
 static float sumY = 0;

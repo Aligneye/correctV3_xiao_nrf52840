@@ -1,10 +1,10 @@
 # AlignEye
 
-ESP32-based posture monitoring and training device.
+XIAO nRF52840-based posture monitoring and training device.
 
 ## Hardware
 
-- Board: Seeed XIAO ESP32-C3
+- Board: Seeed XIAO nRF52840
 - Sensor: Adafruit LIS3DH Accelerometer
 - Framework: Arduino (PlatformIO)
 
@@ -18,6 +18,17 @@ ESP32-based posture monitoring and training device.
 - Auto-off functionality
 - Calibration system
 - Deep sleep power management
+
+## VS Code Setup
+
+1. Install the **PlatformIO IDE** extension in VS Code.
+2. Open this project folder in VS Code.
+3. Build using PlatformIO:
+   - `PlatformIO: Build` (or run `pio run`)
+4. Upload firmware:
+   - `PlatformIO: Upload` (or run `pio run --target upload`)
+5. Open serial monitor:
+   - `PlatformIO: Monitor` at `115200`
 
 ## Building
 

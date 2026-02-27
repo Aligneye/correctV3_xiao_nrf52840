@@ -1,7 +1,6 @@
 #include "vibration_therapy.h"
 #include "config.h"
 #include <math.h>
-#include <esp_task_wdt.h>
 #include "storage_manager.h"
 // Using Arduino's random() function instead of rand()
 
@@ -96,18 +95,19 @@ void playDoubleBeep() {
 // Short haptic and Blue LED blink for button feedback
 volatile bool isProvidingFeedback = false;
 
-// Short haptic and Blue LED blink for button feedback
+// Short haptic and Blue LED blink for button feedback.
+// Keep this lightweight to avoid brownout/reset spikes during BLE activity.
 void playButtonFeedback() {
     isProvidingFeedback = true;
     
     // Temporarily set LED pin to OUTPUT for feedback
     pinMode(LED_BLUE_PIN, OUTPUT); 
     
-    analogWrite(MOTOR_PIN, 255);
+    analogWrite(MOTOR_PIN, VIB_INTENSITY_LOW);
     digitalWrite(LED_BLUE_PIN, LED_ON);
-    delay(50);
+    delay(30);
     analogWrite(MOTOR_PIN, 0); // Stop Motor
-    delay(100); // Keep LED on for visibility
+    delay(60); // Keep LED on briefly for visibility
     digitalWrite(LED_BLUE_PIN, LED_OFF);
     
     // Revert to INPUT for Charging Detection
@@ -138,9 +138,9 @@ void playLongButtonFeedback() {
 // Long beep for failure feedback
 void playFailureFeedback() {
     isProvidingFeedback = true;
-    analogWrite(MOTOR_PIN, 255);
+    analogWrite(MOTOR_PIN, VIB_INTENSITY_HIGH);
     digitalWrite(LED_ERROR_PIN, LED_ON); // Red LED for error
-    delay(1000); // reduced to 1s
+    delay(1200); // long failure feedback
     analogWrite(MOTOR_PIN, 0); 
     digitalWrite(LED_ERROR_PIN, LED_OFF);
     isProvidingFeedback = false;

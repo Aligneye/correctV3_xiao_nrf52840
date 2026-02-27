@@ -3,9 +3,7 @@
 #include <Adafruit_LIS3DH.h>
 #include <Adafruit_Sensor.h>
 #include <math.h>
-#include <Preferences.h>
-
-Preferences preferences;
+#include "storage_manager.h"
 
 Adafruit_LIS3DH lis;
 
@@ -15,23 +13,21 @@ float rawX = 0, rawY = 0, rawZ = 0;
 float Y_ORIGIN = 5.0;
 float Z_ORIGIN = 5.0;
 
-void loadCalibration() {
-    preferences.begin("aligneye", true); // Read-only
-    Y_ORIGIN = preferences.getFloat("y_org", 6.75);
-    Z_ORIGIN = preferences.getFloat("z_org", 6.75);
-    preferences.end();
+static void loadStoredCalibration() {
+    float loadedY = 6.75f;
+    float loadedZ = 6.75f;
+    loadCalibration(loadedY, loadedZ);
+    Y_ORIGIN = loadedY;
+    Z_ORIGIN = loadedZ;
     Serial.printf("CALIB LOADED -> Y:%.2f Z:%.2f\n", Y_ORIGIN, Z_ORIGIN);
 }
 
 void setPostureOrigin(float y, float z) {
     Y_ORIGIN = fabs(y);
     Z_ORIGIN = z;
-    
-    preferences.begin("aligneye", false); // Read-write
-    preferences.putFloat("y_org", Y_ORIGIN);
-    preferences.putFloat("z_org", Z_ORIGIN);
-    preferences.end();
-    Serial.println("CALIB SAVED to NVS");
+
+    saveCalibration(Y_ORIGIN, Z_ORIGIN);
+    Serial.println("CALIB SAVED to storage");
 }
 
 float currentAngle = 0.0;
@@ -52,7 +48,7 @@ void initPostureSensor() {
     if (lis.begin(0x18) || lis.begin(0x19)) {
       lis.setRange(LIS3DH_RANGE_2_G);
       sensorInitialized = true;
-      loadCalibration();
+      loadStoredCalibration();
       return;
     }
     Serial.printf("Sensor init attempt %d failed. Retrying...\n", i + 1);
