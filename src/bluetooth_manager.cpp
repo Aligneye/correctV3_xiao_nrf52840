@@ -76,6 +76,12 @@ static void applyTherapyDurationMinutes(const String &valueRaw) {
 }
 
 static void applyMode(const String &valueRaw) {
+  // Prevent mode switching during calibration - it will complete and switch to TRAINING automatically
+  if (isCalibrating()) {
+    Serial.println("BLE CMD: MODE change ignored - calibration in progress");
+    return;
+  }
+
   String value = valueRaw;
   value.trim();
   value.toUpperCase();
@@ -104,10 +110,18 @@ static void applyCalibrationControl(const String &valueRaw) {
   value.toUpperCase();
 
   if (value == "START") {
-    startCalibration();
+    if (isCalibrating()) {
+      Serial.println("BLE CMD: CALIBRATION START ignored - already calibrating");
+      return;
+    }
+    requestCalibrationStart();  // Defer to main loop - avoids blocking BLE callback
     Serial.println("BLE CMD: CALIBRATION START");
   } else if (value == "CANCEL") {
-    cancelCalibration();
+    if (!isCalibrating()) {
+      Serial.println("BLE CMD: CALIBRATION CANCEL ignored - not calibrating");
+      return;
+    }
+    requestCalibrationCancel();
     Serial.println("BLE CMD: CALIBRATION CANCEL");
   }
 }
@@ -118,10 +132,18 @@ static void applyAction(const String &valueRaw) {
   value.toUpperCase();
 
   if (value == "CALIBRATE") {
-    startCalibration();
+    if (isCalibrating()) {
+      Serial.println("BLE CMD: ACTION=CALIBRATE ignored - already calibrating");
+      return;
+    }
+    requestCalibrationStart();
     Serial.println("BLE CMD: ACTION=CALIBRATE");
   } else if (value == "CALIBRATE_CANCEL") {
-    cancelCalibration();
+    if (!isCalibrating()) {
+      Serial.println("BLE CMD: ACTION=CALIBRATE_CANCEL ignored - not calibrating");
+      return;
+    }
+    requestCalibrationCancel();
     Serial.println("BLE CMD: ACTION=CALIBRATE_CANCEL");
   }
 }
@@ -263,12 +285,13 @@ void sendBLE() {
   }
 
   static unsigned long last = 0;
-
-  if (millis() - last < 500) {
+  unsigned long now = millis();
+  // During calibration, send every 150ms to prevent LINK_SUPERVISION_TIMEOUT
+  unsigned long interval = isCalibrating() ? 150UL : 500UL;
+  if (now - last < interval) {
     return;
   }
-
-  last = millis();
+  last = now;
 
   // --- Calculate Individual Angles (in degrees) ---
   // Angle X: Inclination of X axis
@@ -281,76 +304,85 @@ void sendBLE() {
   // Note: Standard tilt angle. If Z is up (1g), angle is 0. If Z is horizontal (0g), angle is 90.
   float ang_z = atan2(sqrt(rawX * rawX + rawY * rawY), rawZ) * 180.0 / PI;
 
-  // --- Sub-modes ---
-  String subMode = "";
+  // --- Sub-modes (Fully static to avoid heap fragmentation) ---
+  char subModeStr[16];
   if (currentMode == TRACKING) {
-    subMode = "INSTANT";
+    strcpy(subModeStr, "INSTANT");
   } else if (currentMode == TRAINING) {
-    subMode = (currentTrainingDelay == TRAIN_INSTANT)
-                  ? "INSTANT"
-                  : (currentTrainingDelay == TRAIN_DELAYED) ? "DELAYED" : "AUTOMATIC";
+    if (currentTrainingDelay == TRAIN_INSTANT) {
+        strcpy(subModeStr, "INSTANT");
+    } else if (currentTrainingDelay == TRAIN_DELAYED) {
+        strcpy(subModeStr, "DELAYED");
+    } else {
+        strcpy(subModeStr, "AUTOMATIC");
+    }
   } else if (currentMode == THERAPY) {
-    subMode = String(therapyDuration / 60000) + " MIN";
+    snprintf(subModeStr, sizeof(subModeStr), "%lu MIN", therapyDuration / 60000);
   }
 
-  // --- JSON Construction ---
-  String json = "{";
-  json += "\"mode\":\"" +
-          String(currentMode == TRACKING ? "TRACKING" : currentMode == TRAINING ? "TRAINING" : "THERAPY") +
-          "\",";
-  json += "\"sub_mode\":\"" + subMode + "\",";
-
-  json += "\"angle\":" + String(currentAngle, 2) + ",";
-
-  // Raw G-Force
-  json += "\"raw_x_g\":" + String(rawX, 2) + ",";
-  json += "\"raw_y_g\":" + String(rawY, 2) + ",";
-  json += "\"raw_z_g\":" + String(rawZ, 2) + ",";
-
-  // Converted Angles
-  json += "\"angle_x\":" + String(ang_x, 1) + ",";
-  json += "\"angle_y\":" + String(ang_y, 1) + ",";
-  json += "\"angle_z\":" + String(ang_z, 1) + ",";
-
-  json += "\"cal_y\":" + String(Y_ORIGIN, 2) + ",";
-  json += "\"cal_z\":" + String(Z_ORIGIN, 2) + ",";
+  // --- JSON Construction (using fixed buffer to avoid heap fragmentation) ---
+  char jsonBuffer[512];
+  int offset = 0;
 
   bool calibrating = isCalibrating();
   unsigned long calibElapsedMs = getCalibrationElapsedMs();
   unsigned long calibTotalMs = getCalibrationTotalMs();
-  json += "\"is_calibrating\":" + String(calibrating ? "true" : "false") + ",";
-  json += "\"c_phase\":\"" + String(getCalibrationPhase()) + "\",";
-  json += "\"c_elap\":" + String(calibElapsedMs) + ",";
-  json += "\"c_tot\":" + String(calibTotalMs) + ",";
+  const char *calibResult = getCalibrationResult();
 
-  json += "\"posture\":\"" + postureText + "\",";
-  json += "\"is_bad_posture\":" + String(isBadPosture ? "true" : "false") + ",";
-  json += "\"battery_voltage\":" + String(getBatteryVoltage(), 2) + ",";
-  json += "\"battery_percentage\":" + String(getBatteryPercentage());
+  offset += snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset,
+      "{\"mode\":\"%s\",\"sub_mode\":\"%s\",\"angle\":%.2f,"
+      "\"raw_x_g\":%.2f,\"raw_y_g\":%.2f,\"raw_z_g\":%.2f,"
+      "\"angle_x\":%.1f,\"angle_y\":%.1f,\"angle_z\":%.1f,"
+      "\"cal_y\":%.2f,\"cal_z\":%.2f,"
+      "\"is_calibrating\":%s,\"c_phase\":\"%s\",\"c_elap\":%lu,\"c_tot\":%lu,",
+      currentMode == TRACKING ? "TRACKING" : (currentMode == TRAINING ? "TRAINING" : "THERAPY"),
+      subModeStr, currentAngle,
+      rawX, rawY, rawZ,
+      ang_x, ang_y, ang_z,
+      Y_ORIGIN, Z_ORIGIN,
+      calibrating ? "true" : "false", getCalibrationPhase(), calibElapsedMs, calibTotalMs
+  );
 
-  // Add therapy pattern names if in therapy mode
-  if (currentMode == THERAPY) {
-    unsigned long therapyRemainingSec = (getTherapyRemainingMs() + 999UL) / 1000UL;
-    unsigned long therapyElapsedSec = getTherapyElapsedMs() / 1000UL;
-    json += ",\"t_patt\":\"" + String(getCurrentPatternName()) + "\"";
-    json += ",\"t_next\":\"" + String(getNextPatternName()) + "\"";
-    json += ",\"t_elap\":" + String(therapyElapsedSec);
-    json += ",\"t_rem\":" + String(therapyRemainingSec);
+  if (calibResult[0] != '\0' && offset < sizeof(jsonBuffer)) {
+      offset += snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset,
+          "\"calibration_result\":\"%s\",", calibResult);
   }
 
-  json += "}";
+  if (offset < sizeof(jsonBuffer)) {
+      offset += snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset,
+          "\"posture\":\"%s\",\"is_bad_posture\":%s,\"battery_voltage\":%.2f,\"battery_percentage\":%d",
+          postureText.c_str(), isBadPosture ? "true" : "false", getBatteryVoltage(), getBatteryPercentage()
+      );
+  }
+
+  if (currentMode == THERAPY && offset < sizeof(jsonBuffer)) {
+      unsigned long therapyRemainingSec = (getTherapyRemainingMs() + 999UL) / 1000UL;
+      unsigned long therapyElapsedSec = getTherapyElapsedMs() / 1000UL;
+      offset += snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset,
+          ",\"t_patt\":\"%s\",\"t_next\":\"%s\",\"t_elap\":%lu,\"t_rem\":%lu",
+          getCurrentPatternName(), getNextPatternName(), therapyElapsedSec, therapyRemainingSec
+      );
+  }
+
+  if (offset < sizeof(jsonBuffer)) {
+      snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset, "}");
+  } else {
+      // Safety fallback in case buffer overflows
+      jsonBuffer[sizeof(jsonBuffer) - 2] = '}';
+      jsonBuffer[sizeof(jsonBuffer) - 1] = '\0';
+  }
 
   // Send if connected
   if (deviceConnected) {
-    pCharacteristic->write(json.c_str());
-    bool sent = pCharacteristic->notify(json.c_str());
+    pCharacteristic->write(jsonBuffer);
+    bool sent = pCharacteristic->notify(jsonBuffer);
     Serial.print(sent ? "[BLE SENT] " : "[BLE BUSY] ");
   } else {
     Serial.print("[WAITING]  ");
   }
 
   // Print JSON to Serial as requested
-  Serial.println(json);
+  Serial.println(jsonBuffer);
 }
 
 

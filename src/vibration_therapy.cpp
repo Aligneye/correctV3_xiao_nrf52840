@@ -73,95 +73,159 @@ unsigned long getTherapyRemainingMs() {
 }
 
 
-// Helper for double beep
-void playDoubleBeep() {
-    pinMode(LED_BLUE_PIN, OUTPUT);
-    
-    analogWrite(MOTOR_PIN, VIB_INTENSITY_LOW);
-    digitalWrite(LED_BLUE_PIN, LED_ON);
-    delay(150);
-    analogWrite(MOTOR_PIN, 0);
-    digitalWrite(LED_BLUE_PIN, LED_OFF);
-    delay(150);
-    analogWrite(MOTOR_PIN, VIB_INTENSITY_LOW);
-    digitalWrite(LED_BLUE_PIN, LED_ON);
-    delay(150);
-    analogWrite(MOTOR_PIN, 0);
-    digitalWrite(LED_BLUE_PIN, LED_OFF);
-    
-    pinMode(LED_BLUE_PIN, INPUT_PULLUP);
-}
+// --- Non-blocking Haptic State Machine ---
+enum HapticSequence {
+    HAPTIC_NONE,
+    HAPTIC_DOUBLE_BEEP,
+    HAPTIC_BUTTON,
+    HAPTIC_LONG_BUTTON,
+    HAPTIC_FAILURE,
+    HAPTIC_CALIBRATION
+};
 
-// Short haptic and Blue LED blink for button feedback
+static HapticSequence currentHaptic = HAPTIC_NONE;
+static unsigned long hapticStartTime = 0;
+static int hapticStep = 0;
 volatile bool isProvidingFeedback = false;
 
-// Short haptic and Blue LED blink for button feedback.
-// Keep this lightweight to avoid brownout/reset spikes during BLE activity.
-void playButtonFeedback() {
-    isProvidingFeedback = true;
-    
-    // Temporarily set LED pin to OUTPUT for feedback
-    pinMode(LED_BLUE_PIN, OUTPUT); 
-    
-    analogWrite(MOTOR_PIN, VIB_INTENSITY_LOW);
-    digitalWrite(LED_BLUE_PIN, LED_ON);
-    delay(30);
-    analogWrite(MOTOR_PIN, 0); // Stop Motor
-    delay(60); // Keep LED on briefly for visibility
-    digitalWrite(LED_BLUE_PIN, LED_OFF);
-    
-    // Revert to INPUT for Charging Detection
-    pinMode(LED_BLUE_PIN, INPUT_PULLUP);
-    
-    isProvidingFeedback = false;
+// Call this from loop()
+void updateHaptics(unsigned long now) {
+    if (currentHaptic == HAPTIC_NONE) {
+        return;
+    }
+
+    unsigned long elapsed = now - hapticStartTime;
+
+    switch (currentHaptic) {
+        case HAPTIC_DOUBLE_BEEP:
+            if (hapticStep == 0) {
+                pinMode(LED_BLUE_PIN, OUTPUT);
+                analogWrite(MOTOR_PIN, VIB_INTENSITY_LOW);
+                digitalWrite(LED_BLUE_PIN, LED_ON);
+                hapticStep = 1;
+            } else if (hapticStep == 1 && elapsed >= 150) {
+                analogWrite(MOTOR_PIN, 0);
+                digitalWrite(LED_BLUE_PIN, LED_OFF);
+                hapticStep = 2;
+            } else if (hapticStep == 2 && elapsed >= 300) { // 150 + 150
+                analogWrite(MOTOR_PIN, VIB_INTENSITY_LOW);
+                digitalWrite(LED_BLUE_PIN, LED_ON);
+                hapticStep = 3;
+            } else if (hapticStep == 3 && elapsed >= 450) { // 300 + 150 
+                analogWrite(MOTOR_PIN, 0);
+                digitalWrite(LED_BLUE_PIN, LED_OFF);
+                pinMode(LED_BLUE_PIN, INPUT_PULLUP);
+                currentHaptic = HAPTIC_NONE;
+                isProvidingFeedback = false;
+            }
+            break;
+
+        case HAPTIC_BUTTON:
+            if (hapticStep == 0) {
+                pinMode(LED_BLUE_PIN, OUTPUT); 
+                analogWrite(MOTOR_PIN, VIB_INTENSITY_LOW);
+                digitalWrite(LED_BLUE_PIN, LED_ON);
+                hapticStep = 1;
+            } else if (hapticStep == 1 && elapsed >= 30) {
+                analogWrite(MOTOR_PIN, 0); // Stop Motor early
+                hapticStep = 2;
+            } else if (hapticStep == 2 && elapsed >= 90) { // 30 + 60
+                digitalWrite(LED_BLUE_PIN, LED_OFF);
+                pinMode(LED_BLUE_PIN, INPUT_PULLUP);
+                currentHaptic = HAPTIC_NONE;
+                isProvidingFeedback = false;
+            }
+            break;
+
+        case HAPTIC_LONG_BUTTON:
+            if (hapticStep == 0) {
+                pinMode(LED_BLUE_PIN, OUTPUT);
+                analogWrite(MOTOR_PIN, 255);
+                digitalWrite(LED_BLUE_PIN, LED_ON);
+                hapticStep = 1;
+            } else if (hapticStep == 1 && elapsed >= HS_LONG_BEEP) {
+                analogWrite(MOTOR_PIN, 0);
+                digitalWrite(LED_BLUE_PIN, LED_OFF);
+                pinMode(LED_BLUE_PIN, INPUT_PULLUP);
+                currentHaptic = HAPTIC_NONE;
+                isProvidingFeedback = false;
+            }
+            break;
+
+        case HAPTIC_FAILURE:
+            if (hapticStep == 0) {
+                pinMode(LED_ERROR_PIN, OUTPUT);
+                analogWrite(MOTOR_PIN, VIB_INTENSITY_HIGH);
+                digitalWrite(LED_ERROR_PIN, LED_ON);
+                hapticStep = 1;
+            } else if (hapticStep == 1 && elapsed >= 1200) {
+                analogWrite(MOTOR_PIN, 0); 
+                digitalWrite(LED_ERROR_PIN, LED_OFF);
+                pinMode(LED_ERROR_PIN, INPUT_PULLUP);
+                currentHaptic = HAPTIC_NONE;
+                isProvidingFeedback = false;
+            }
+            break;
+            
+        case HAPTIC_CALIBRATION:
+            if (hapticStep == 0) {
+                pinMode(LED_BLUE_PIN, OUTPUT); 
+                analogWrite(MOTOR_PIN, VIB_INTENSITY_MAX);
+                digitalWrite(LED_BLUE_PIN, LED_ON);
+                hapticStep = 1;
+            } else if (hapticStep == 1 && elapsed >= 150) {
+                analogWrite(MOTOR_PIN, 0); 
+                hapticStep = 2;
+            } else if (hapticStep == 2 && elapsed >= 210) { // 150 + 60
+                digitalWrite(LED_BLUE_PIN, LED_OFF);
+                pinMode(LED_BLUE_PIN, INPUT_PULLUP);
+                currentHaptic = HAPTIC_NONE;
+                isProvidingFeedback = false;
+            }
+            break;
+    }
 }
 
-// Longer haptic + LED blink used before power-off
+// Trigger functions
+void playDoubleBeep() {
+    isProvidingFeedback = true;
+    currentHaptic = HAPTIC_DOUBLE_BEEP;
+    hapticStartTime = millis();
+    hapticStep = 0;
+    updateHaptics(millis()); // kickstart
+}
+
+void playButtonFeedback() {
+    isProvidingFeedback = true;
+    currentHaptic = HAPTIC_BUTTON;
+    hapticStartTime = millis();
+    hapticStep = 0;
+    updateHaptics(millis()); // kickstart
+}
+
 void playLongButtonFeedback() {
     isProvidingFeedback = true;
-
-    // Temporarily set LED pin to OUTPUT for feedback
-    pinMode(LED_BLUE_PIN, OUTPUT);
-
-    analogWrite(MOTOR_PIN, 255);
-    digitalWrite(LED_BLUE_PIN, LED_ON);
-    delay(HS_LONG_BEEP);
-    analogWrite(MOTOR_PIN, 0);
-    digitalWrite(LED_BLUE_PIN, LED_OFF);
-
-    // Revert to INPUT for Charging Detection
-    pinMode(LED_BLUE_PIN, INPUT_PULLUP);
-
-    isProvidingFeedback = false;
+    currentHaptic = HAPTIC_LONG_BUTTON;
+    hapticStartTime = millis();
+    hapticStep = 0;
+    updateHaptics(millis()); // kickstart
 }
 
 void playFailureFeedback() {
     isProvidingFeedback = true;
-    analogWrite(MOTOR_PIN, VIB_INTENSITY_HIGH);
-    digitalWrite(LED_ERROR_PIN, LED_ON); // Red LED for error
-    delay(1200); // long failure feedback
-    analogWrite(MOTOR_PIN, 0); 
-    digitalWrite(LED_ERROR_PIN, LED_OFF);
-    isProvidingFeedback = false;
+    currentHaptic = HAPTIC_FAILURE;
+    hapticStartTime = millis();
+    hapticStep = 0;
+    updateHaptics(millis()); // kickstart
 }
 
 void playCalibrationFeedback(bool isStart) {
+    (void)isStart; // unused but kept for signature matching
     isProvidingFeedback = true;
-    pinMode(LED_BLUE_PIN, OUTPUT); 
-    
-    analogWrite(MOTOR_PIN, VIB_INTENSITY_MAX); // MAX intensity
-    digitalWrite(LED_BLUE_PIN, LED_ON);
-    
-    delay(150); // The user requested the start and success beeps to be the same length
-    
-    analogWrite(MOTOR_PIN, 0); // Stop Motor
-    delay(60); // Keep LED on briefly for visibility
-    digitalWrite(LED_BLUE_PIN, LED_OFF);
-    
-    // Revert to INPUT for Charging Detection
-    pinMode(LED_BLUE_PIN, INPUT_PULLUP);
-    
-    isProvidingFeedback = false;
+    currentHaptic = HAPTIC_CALIBRATION;
+    hapticStartTime = millis();
+    hapticStep = 0;
+    updateHaptics(millis()); // kickstart
 }
 
 void setTrackingMode() {
@@ -340,10 +404,10 @@ void initializePatternSequence() {
   int minutes = therapyDuration / 60000;
   
   if (minutes == 5) {
-    // 5 min: 4 patterns total (1 min each), first is always Muscle Activation
-    totalPatterns = 4;
+    // 5 min: 3 patterns total (2 min each), first is always Muscle Activation
+    totalPatterns = 3;
     
-    // Randomly select 3 more patterns from remaining 9
+    // Randomly select 2 more patterns from remaining 9
     int availablePatterns[9];
     int count = 0;
     for (int i = PATTERN_REVERSE_RAMP; i < PATTERN_COUNT; i++) {
@@ -358,16 +422,16 @@ void initializePatternSequence() {
       availablePatterns[j] = temp;
     }
     
-    // Fill remaining 3 slots
-    for (int i = 1; i < 4; i++) {
+    // Fill remaining 2 slots
+    for (int i = 1; i < 3; i++) {
       patternSequence[i] = availablePatterns[i - 1];
     }
     
   } else if (minutes == 10) {
-    // 10 min: 9 patterns total (1 min each), first is always Muscle Activation
-    totalPatterns = 9;
+    // 10 min: 5 patterns total (2 min each), first is always Muscle Activation
+    totalPatterns = 5;
     
-    // Randomly select 8 more patterns from remaining 9
+    // Randomly select 4 more patterns from remaining 9
     int availablePatterns[9];
     int count = 0;
     for (int i = PATTERN_REVERSE_RAMP; i < PATTERN_COUNT; i++) {
@@ -382,14 +446,14 @@ void initializePatternSequence() {
       availablePatterns[j] = temp;
     }
     
-    // Fill remaining 8 slots
-    for (int i = 1; i < 9; i++) {
+    // Fill remaining 4 slots
+    for (int i = 1; i < 5; i++) {
       patternSequence[i] = availablePatterns[i - 1];
     }
     
   } else if (minutes == 20) {
-    // 20 min: All 10 patterns should play (some will repeat)
-    totalPatterns = 20;
+    // 20 min: All 10 patterns should play (2 min each)
+    totalPatterns = 10;
     
     // Fill first 10 with all patterns in random order (except first is Muscle Activation)
     int availablePatterns[9];
@@ -410,11 +474,6 @@ void initializePatternSequence() {
     for (int i = 1; i < 10; i++) {
       patternSequence[i] = availablePatterns[i - 1];
     }
-    
-    // Fill remaining 10 slots with random patterns (all can be used)
-    for (int i = 10; i < 20; i++) {
-      patternSequence[i] = random(0, PATTERN_COUNT);
-    }
   }
   
   Serial.printf("Pattern sequence initialized: %d patterns\n", totalPatterns);
@@ -423,10 +482,10 @@ void initializePatternSequence() {
   }
 }
 
-// Pattern 1: Muscle Activation - 30% to 100% ramp (60 sec)
+// Pattern 1: Muscle Activation - 30% to 100% ramp (120 sec)
 void patternMuscleActivation(unsigned long patternElapsed) {
-  if (patternElapsed <= 60000) {
-    float intensityPercent = 30.0 + ((float)patternElapsed / 60000.0) * 70.0;
+  if (patternElapsed <= 120000) {
+    float intensityPercent = 30.0 + ((float)patternElapsed / 120000.0) * 70.0;
     int pwmValue = (intensityPercent / 100.0) * 255;
     analogWrite(MOTOR_PIN, constrain(pwmValue, 0, 255));
   } else {
@@ -434,10 +493,10 @@ void patternMuscleActivation(unsigned long patternElapsed) {
   }
 }
 
-// Pattern 2: Reverse Ramp - 100% to 30% ramp (60 sec)
+// Pattern 2: Reverse Ramp - 100% to 30% ramp (120 sec)
 void patternReverseRamp(unsigned long patternElapsed) {
-  if (patternElapsed <= 60000) {
-    float intensityPercent = 100.0 - ((float)patternElapsed / 60000.0) * 70.0;
+  if (patternElapsed <= 120000) {
+    float intensityPercent = 100.0 - ((float)patternElapsed / 120000.0) * 70.0;
     int pwmValue = (intensityPercent / 100.0) * 255;
     analogWrite(MOTOR_PIN, constrain(pwmValue, 0, 255));
   } else {
@@ -493,7 +552,7 @@ void patternSlowWave(unsigned long patternElapsed) {
 
 // Pattern 6: Sinusoidal Wave - heavy sinusoidal pattern
 void patternSinusoidalWave(unsigned long patternElapsed) {
-  // 1 minute = 60 seconds, complete multiple sine cycles
+  // 2 minutes = 120 seconds, complete multiple sine cycles
   float angle = (patternElapsed / 1000.0) * 360.0 / 2.0; // 2 second period
   float rad = angle * PI / 180.0;
   float s = (sin(rad) + 1.0) / 2.0; // 0 to 1
@@ -635,8 +694,8 @@ void handleTherapy(unsigned long now) {
     // Calculate which pattern we're in and elapsed time for current pattern
     unsigned long patternElapsed = now - patternStartTime;
     
-    // Check if current pattern (60 seconds) is complete
-    if (patternElapsed >= 60000) {
+    // Check if current pattern (120 seconds) is complete
+    if (patternElapsed >= 120000) {
       currentPatternIndex++;
       patternStartTime = now;
       patternElapsed = 0;

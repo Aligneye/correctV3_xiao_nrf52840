@@ -9,11 +9,7 @@ void handleTracking();
 void handleTraining(unsigned long now);
 void handleTherapy(unsigned long now);
 
-// void updateHaptics(unsigned long now); // Removed
-// void waitForHaptic(); // Removed
-// void playButtonFeedback(int count);   // Removed
-// void playStatusFeedback(int count);   // Removed
-// void playFeedback(int count, int pin); // Removed
+void updateHaptics(unsigned long now);
 void startVibration(int intensity);
 void stopVibration();
 void resetAllOutputs();

@@ -159,8 +159,8 @@ void loop() {
 
   handleCalibration(); // Check calibration state first
   
-  // updateHaptics(millis()); // Removed
-
+  updateHaptics(millis()); // Process non-blocking haptics
+  
   if (isCalibrating()) {
      // Keep BLE updates flowing so the app can sync calibration progress.
      sendBLE();

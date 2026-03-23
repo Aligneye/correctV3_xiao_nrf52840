@@ -1,0 +1,65 @@
+commit 77ecc47a72f985729bb7bb062a14a69a91b0be3e
+Author: harshit kumar <team.aligneye@gmail.com>
+Date:   Sat Feb 14 20:50:39 2026 +0530
+
+    Update vibration therapy and button manager
+
+diff --git a/include/vibration_therapy.h b/include/vibration_therapy.h
+index 0ef5956..b645040 100644
+--- a/include/vibration_therapy.h
++++ b/include/vibration_therapy.h
+@@ -20,6 +20,7 @@ void resetAllOutputs();
+ 
+ // New Interactions
+ void playButtonFeedback(); // Added for button click feedback
++void playLongButtonFeedback(); // Long feedback for power-off action
+ void playFailureFeedback(); // Added for failure feedback
+ void cycleTherapyDuration();
+ void cycleTrainingDelay();
+diff --git a/src/button_manager.cpp b/src/button_manager.cpp
+index 7b815e6..1d89ee0 100644
+--- a/src/button_manager.cpp
++++ b/src/button_manager.cpp
+@@ -71,7 +71,11 @@ static void processPendingButtonAction() {
+       break;
+ 
+     case ACTION_DOUBLE_CLICK:
+-      playButtonFeedback();
++      if (currentMode == TRACKING) {
++        playLongButtonFeedback();
++      } else {
++        playButtonFeedback();
++      }
+ 
+       switch (currentMode) {
+         case TRACKING:
+diff --git a/src/vibration_therapy.cpp b/src/vibration_therapy.cpp
+index f270539..1d2d806 100644
+--- a/src/vibration_therapy.cpp
++++ b/src/vibration_therapy.cpp
+@@ -116,6 +116,25 @@ void playButtonFeedback() {
+     isProvidingFeedback = false;
+ }
+ 
++// Longer haptic + LED blink used before power-off
++void playLongButtonFeedback() {
++    isProvidingFeedback = true;
++
++    // Temporarily set LED pin to OUTPUT for feedback
++    pinMode(LED_BLUE_PIN, OUTPUT);
++
++    analogWrite(MOTOR_PIN, 255);
++    digitalWrite(LED_BLUE_PIN, LED_ON);
++    delay(HS_LONG_BEEP);
++    analogWrite(MOTOR_PIN, 0);
++    digitalWrite(LED_BLUE_PIN, LED_OFF);
++
++    // Revert to INPUT for Charging Detection
++    pinMode(LED_BLUE_PIN, INPUT_PULLUP);
++
++    isProvidingFeedback = false;
++}
++
+ // Long beep for failure feedback
+ void playFailureFeedback() {
+     isProvidingFeedback = true;

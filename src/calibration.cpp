@@ -3,6 +3,7 @@
 #include "vibration_therapy.h"
 #include "posture_training.h"
 #include <Adafruit_LIS3DH.h>
+#include <string.h>
 
 extern Adafruit_LIS3DH lis; // From posture_training.cpp
 
@@ -24,8 +25,42 @@ static const unsigned long CALIB_GET_READY_MS = 3000UL;
 static const unsigned long CALIB_HOLD_MS = 5000UL;
 static const unsigned long CALIB_TOTAL_MS = CALIB_GET_READY_MS + CALIB_HOLD_MS;
 
+// Result broadcast to mobile: "complete" or "failed", cleared after ~2s
+static char lastCalibrationResult[16] = "";
+static unsigned long calibrationResultSetAt = 0;
+static const unsigned long CALIB_RESULT_BROADCAST_MS = 4000UL; // Increased to 4s for better reliability on reconnect
+
+// Deferred from BLE callback to avoid blocking (prevents LINK_SUPERVISION_TIMEOUT)
+static volatile bool pendingStart = false;
+static volatile bool pendingCancel = false;
+
 void initCalibration() {
     calibState = CALIB_IDLE;
+    pendingStart = false;
+    pendingCancel = false;
+}
+
+void requestCalibrationStart() {
+    pendingStart = true;
+}
+
+void requestCalibrationCancel() {
+    pendingCancel = true;
+}
+
+const char *getCalibrationResult() {
+    // Don't return result if calibration is currently active
+    if (isCalibrating()) {
+        return "";
+    }
+    if (lastCalibrationResult[0] == '\0') {
+        return "";
+    }
+    if (millis() - calibrationResultSetAt > CALIB_RESULT_BROADCAST_MS) {
+        lastCalibrationResult[0] = '\0';
+        return "";
+    }
+    return lastCalibrationResult;
 }
 
 bool isCalibrating() {
@@ -56,15 +91,23 @@ const char *getCalibrationPhase() {
 }
 
 void startCalibration() {
-    if (calibState != CALIB_IDLE) return;
+    if (calibState != CALIB_IDLE) {
+        Serial.printf("CALIBRATION: Start ignored - state is %d (not IDLE)\n", calibState);
+        return;
+    }
 
+    // Clear any previous calibration result
+    lastCalibrationResult[0] = '\0';
+    calibrationResultSetAt = 0;
+
+    Serial.println("CALIBRATION: Starting new calibration");
     playCalibrationFeedback(true); // Max intensity beep on start
 
     calibState = CALIB_HOLD;
 
     // Reset Logic
     stabilityStartTime = millis();
-    lastBeepTime = millis() - CALIB_BEEP_INTERVAL; // Trigger first beep immediately
+    lastBeepTime = millis(); // Trigger first beep/tick at 1s mark
     beepCounter = 0;
 
     sumY = 0;
@@ -93,6 +136,18 @@ void cancelCalibration() {
 }
 
 void handleCalibration() {
+    // Process deferred requests from BLE callback (avoid blocking callback)
+    if (pendingCancel) {
+        pendingCancel = false;
+        cancelCalibration();
+        return;
+    }
+    if (pendingStart && calibState == CALIB_IDLE) {
+        pendingStart = false;
+        startCalibration();
+        return;
+    }
+
     if (calibState == CALIB_IDLE) return;
     if (calibState != CALIB_HOLD) return;
 
@@ -103,6 +158,8 @@ void handleCalibration() {
     if (elapsed > 10000) {
         Serial.println("CALIB: TIMEOUT - Failed");
         calibState = CALIB_IDLE;
+        strcpy(lastCalibrationResult, "failed");
+        calibrationResultSetAt = millis();
         playFailureFeedback();
         setTrackingMode();
         return;
@@ -113,6 +170,7 @@ void handleCalibration() {
         if (currentMillis - lastBeepTime >= 1000) {
             lastBeepTime = currentMillis;
             Serial.printf("CALIB: Getting Ready... %lu ms\n", elapsed);
+            playButtonFeedback(); // Ticking beep during countdown
         }
 
         // Ensure we have fresh "last" values when phase 2 starts
@@ -150,6 +208,8 @@ void handleCalibration() {
             // User moved! FAIL immediately.
             Serial.println("CALIB: BAD MOVEMENT - Failed");
             calibState = CALIB_IDLE;
+            strcpy(lastCalibrationResult, "failed");
+            calibrationResultSetAt = millis();
             playFailureFeedback(); // 3s beep
             setTrackingMode();     // Back to Tracking
             return;
@@ -178,6 +238,8 @@ void handleCalibration() {
                       sampleCount, avgY, avgZ);
 
         calibState = CALIB_IDLE;
+        strcpy(lastCalibrationResult, "complete");
+        calibrationResultSetAt = millis();
 
         playCalibrationFeedback(false); // Max intensity beep on completion
 

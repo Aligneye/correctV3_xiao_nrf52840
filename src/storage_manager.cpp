@@ -93,11 +93,31 @@ void sanitizeSettings() {
 
 #if ALIGNEYE_HAS_FS
 void persistSettings() {
-    InternalFS.remove("/settings.dat"); // Ensure clean write
-    File file = InternalFS.open("/settings.dat", FILE_O_WRITE);
-    if (file) {
-        file.write((uint8_t*)&g_settings, sizeof(g_settings));
-        file.close();
+    // Atomic-style write: write to temp file first, then replace main file.
+    // This reduces corruption risk on sudden power loss during writes.
+    File temp = InternalFS.open("/settings.tmp", FILE_O_WRITE);
+    if (!temp) {
+        return;
+    }
+
+    size_t written = temp.write((uint8_t*)&g_settings, sizeof(g_settings));
+    temp.flush();
+    temp.close();
+    if (written != sizeof(g_settings)) {
+        InternalFS.remove("/settings.tmp");
+        return;
+    }
+
+    InternalFS.remove("/settings.dat");
+    if (!InternalFS.rename("/settings.tmp", "/settings.dat")) {
+        // Fallback: try direct write if rename is unsupported on this FS.
+        File file = InternalFS.open("/settings.dat", FILE_O_WRITE);
+        if (file) {
+            file.write((uint8_t*)&g_settings, sizeof(g_settings));
+            file.flush();
+            file.close();
+        }
+        InternalFS.remove("/settings.tmp");
     }
 }
 #else
