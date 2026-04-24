@@ -1,6 +1,7 @@
 #include "vibration_therapy.h"
 #include "config.h"
 #include "storage_manager.h"
+#include "session_stats.h"
 #include <math.h>
 
 unsigned long vibTimer = 0;
@@ -214,6 +215,9 @@ void playCalibrationFeedback(bool isStart) {
 
 void setTrackingMode(bool silent) {
   Serial.println("TRACKING");
+  // End any active sessions
+  onTrainingEnded();
+  onTherapyEnded();
   currentMode = TRACKING;
   therapyState = THERAPY_IDLE;
   trainingStart = 0;
@@ -225,10 +229,13 @@ void setTrackingMode(bool silent) {
 
 void setTrainingMode(bool silent) {
   Serial.println("Posture TRAINING");
+  // End therapy session if active, start training session
+  onTherapyEnded();
   currentMode = TRAINING;
   therapyState = THERAPY_IDLE;
   trainingStart = millis();
   resetAllOutputs();
+  onTrainingStarted();
   if (!silent) {
     playButtonFeedback();
   }
@@ -236,6 +243,8 @@ void setTrainingMode(bool silent) {
 
 void setTherapyMode() {
   Serial.println("THERAPY (Started)");
+  // End training session if active, start therapy session
+  onTrainingEnded();
   resetAllOutputs();
   currentMode = THERAPY;
   therapyState = THERAPY_RUNNING;
@@ -245,6 +254,7 @@ void setTherapyMode() {
   currentPatternIndex = 0;
   initializePatternSequence();
   patternStartTime = therapyStart;
+  onTherapyStarted();
 
   playButtonFeedback();
 }

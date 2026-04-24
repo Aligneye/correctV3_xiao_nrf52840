@@ -4,6 +4,7 @@
 #include <Adafruit_Sensor.h>
 #include <math.h>
 #include "storage_manager.h"
+#include "session_stats.h"
 
 Adafruit_LIS3DH lis;
 
@@ -136,10 +137,18 @@ void updatePostureAngle() {
   }
 
   // 2. Determine Status Text (Good zone +/- 25)
-  if (currentAngle > 25 || currentAngle < -25) {
-      postureText = "BAD POSTURE";
+  String baseText = (currentAngle > 25 || currentAngle < -25) ? "BAD POSTURE" : "GOOD POSTURE";
+  
+  // Only display session stats if the session is active (i.e. after 1 minute)
+  if (currentMode == TRAINING && isTrainingSessionActive()) {
+      char statBuf[64];
+      snprintf(statBuf, sizeof(statBuf), " [S1:%lu %lus %lu-bad]", 
+          (unsigned long)getTrainingSessionNumber(),
+          (unsigned long)getTrainingSessionDurationSec(),
+          (unsigned long)getTrainingSessionBadPostureCount());
+      postureText = baseText + statBuf;
   } else {
-      postureText = "GOOD POSTURE";
+      postureText = baseText;
   }
 
   // 3. Determine Motor Trigger
