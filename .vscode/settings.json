@@ -1,0 +1,12 @@
+{
+    "C_Cpp.errorSquiggles": "disabled",
+    "editor.suggest.showInlineDetails": false,
+    "emmet.useInlineCompletions": true,
+    "dart.showInspectorNotificationsForWidgetErrors": false,
+    "debug.showInlineBreakpointCandidates": false,
+    "editor.autoIndentOnPasteWithinString": true,
+    "typescript.tsserver.enableRegionDiagnostics": true,
+    "composer.diagnosticsEnabled": true,
+    "phpunit.enableAutomaticRefresh": true,
+    "errorLens.enabled": false
+}
