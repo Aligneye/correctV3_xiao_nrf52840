@@ -9,6 +9,7 @@
 #include "vibration_therapy.h"
 #include "battery_percentage.h"
 #include "storage_manager.h"
+#include "session_stats.h"
 
 // Device name and UUIDs are sourced from config.h
 static BLEService gService(BLE_SERVICE_UUID);
@@ -145,6 +146,9 @@ static void applyAction(const String &valueRaw) {
     }
     requestCalibrationCancel();
     Serial.println("BLE CMD: ACTION=CALIBRATE_CANCEL");
+  } else if (value == "RESET_STATS") {
+    resetAllSessionCounters();
+    Serial.println("BLE CMD: ACTION=RESET_STATS");
   }
 }
 
@@ -249,7 +253,7 @@ void initBLE() {
     gCharacteristic.setProperties(
         CHR_PROPS_NOTIFY | CHR_PROPS_READ | CHR_PROPS_WRITE | CHR_PROPS_WRITE_WO_RESP);
     gCharacteristic.setPermission(SECMODE_ENC_NO_MITM, SECMODE_ENC_NO_MITM);
-    gCharacteristic.setMaxLen(512); // Increased from 320 to handle larger JSON payloads
+    gCharacteristic.setMaxLen(512); // nRF52 SoftDevice hard cap (BLE_GATTS_VAR_ATTR_LEN_MAX)
     gCharacteristic.setWriteCallback(onCharacteristicWrite);
     gCharacteristic.begin();
     gCharacteristic.write("{}");
@@ -293,17 +297,6 @@ void sendBLE() {
   }
   last = now;
 
-  // --- Calculate Individual Angles (in degrees) ---
-  // Angle X: Inclination of X axis
-  float ang_x = atan2(rawX, sqrt(rawY * rawY + rawZ * rawZ)) * 180.0 / PI;
-
-  // Angle Y: Inclination of Y axis
-  float ang_y = atan2(rawY, sqrt(rawX * rawX + rawZ * rawZ)) * 180.0 / PI;
-
-  // Angle Z: Inclination of Z axis from vertical (Z-axis)
-  // Note: Standard tilt angle. If Z is up (1g), angle is 0. If Z is horizontal (0g), angle is 90.
-  float ang_z = atan2(sqrt(rawX * rawX + rawY * rawY), rawZ) * 180.0 / PI;
-
   // --- Sub-modes (Fully static to avoid heap fragmentation) ---
   char subModeStr[16];
   if (currentMode == TRACKING) {
@@ -321,6 +314,7 @@ void sendBLE() {
   }
 
   // --- JSON Construction (using fixed buffer to avoid heap fragmentation) ---
+  // Sized to match BLE characteristic maxLen (see initBLE, capped at 512 by SoftDevice).
   char jsonBuffer[512];
   int offset = 0;
 
@@ -332,13 +326,11 @@ void sendBLE() {
   offset += snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset,
       "{\"mode\":\"%s\",\"sub_mode\":\"%s\",\"angle\":%.2f,"
       "\"raw_x_g\":%.2f,\"raw_y_g\":%.2f,\"raw_z_g\":%.2f,"
-      "\"angle_x\":%.1f,\"angle_y\":%.1f,\"angle_z\":%.1f,"
       "\"cal_y\":%.2f,\"cal_z\":%.2f,"
       "\"is_calibrating\":%s,\"c_phase\":\"%s\",\"c_elap\":%lu,\"c_tot\":%lu,",
       currentMode == TRACKING ? "TRACKING" : (currentMode == TRAINING ? "TRAINING" : "THERAPY"),
       subModeStr, currentAngle,
       rawX, rawY, rawZ,
-      ang_x, ang_y, ang_z,
       Y_ORIGIN, Z_ORIGIN,
       calibrating ? "true" : "false", getCalibrationPhase(), calibElapsedMs, calibTotalMs
   );
@@ -358,9 +350,16 @@ void sendBLE() {
   if (currentMode == THERAPY && offset < sizeof(jsonBuffer)) {
       unsigned long therapyRemainingSec = (getTherapyRemainingMs() + 999UL) / 1000UL;
       unsigned long therapyElapsedSec = getTherapyElapsedMs() / 1000UL;
+      
+      char pattBuf[64];
+      snprintf(pattBuf, sizeof(pattBuf), "%s [S2:%lu %lus]", 
+          getCurrentPatternName(), 
+          (unsigned long)getTherapySessionNumber(),
+          (unsigned long)getTherapySessionDurationSec());
+
       offset += snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset,
           ",\"t_patt\":\"%s\",\"t_next\":\"%s\",\"t_elap\":%lu,\"t_rem\":%lu",
-          getCurrentPatternName(), getNextPatternName(), therapyElapsedSec, therapyRemainingSec
+          pattBuf, getNextPatternName(), therapyElapsedSec, therapyRemainingSec
       );
   }
 

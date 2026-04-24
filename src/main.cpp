@@ -11,6 +11,7 @@
 #include "battery_percentage.h"
 #include "calibration.h"
 #include "storage_manager.h"
+#include "session_stats.h"
 #include <Adafruit_SleepyDog.h>
 
 /******** RTC STATE ********/
@@ -115,6 +116,7 @@ void setup() {
   initAutoOff();
   initCalibration();
   initBattery(); // Initialize Battery 
+  initSessionStats();
   
   // Determine wake reason and set state accordingly
   bool wokeFromButton = wokeFromButtonSleep();
@@ -170,6 +172,7 @@ void loop() {
   }
 
   updatePostureAngle();
+  updateSessionStats();
   
   checkAutoOff(); // Handle auto-off logic
 
