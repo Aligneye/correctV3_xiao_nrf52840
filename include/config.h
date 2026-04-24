@@ -45,7 +45,7 @@ enum TherapyState {
 };
 enum TrainingDelay { TRAIN_DELAYED, TRAIN_AUTOMATIC, TRAIN_INSTANT };
 
-// Therapy Patterns (10 total)
+// Therapy Patterns (14 total)
 enum TherapyPattern {
   PATTERN_MUSCLE_ACTIVATION = 0,  // Always first
   PATTERN_REVERSE_RAMP,
@@ -57,6 +57,10 @@ enum TherapyPattern {
   PATTERN_DOUBLE_WAVE,
   PATTERN_ANTI_FATIGUE,
   PATTERN_PULSE_RAMP,
+  PATTERN_INSTANT_TRIPLE_BASE,
+  PATTERN_CONST_TRIPLE,
+  PATTERN_EXP_DOUBLE_SINE,
+  PATTERN_BREATH_EXP_SQUARE,
   PATTERN_COUNT  // Total count
 };
 

@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 
-void setTrackingMode();
+void setTrackingMode(bool silent = false);
 void setTrainingMode(bool silent = false);
 void setTherapyMode();
 
@@ -13,6 +13,7 @@ void updateHaptics(unsigned long now);
 void startVibration(int intensity);
 void stopVibration();
 void resetAllOutputs();
+void forceStopMotorAndHaptics();
 
 // New Interactions
 void playButtonFeedback(); // Added for button click feedback
@@ -27,5 +28,6 @@ const char* getCurrentPatternName();
 const char* getNextPatternName();
 unsigned long getTherapyElapsedMs();
 unsigned long getTherapyRemainingMs();
+unsigned long getTrainingElapsedMs();
 
 extern volatile bool isProvidingFeedback;

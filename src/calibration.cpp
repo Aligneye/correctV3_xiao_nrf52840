@@ -160,8 +160,10 @@ void handleCalibration() {
         calibState = CALIB_IDLE;
         strcpy(lastCalibrationResult, "failed");
         calibrationResultSetAt = millis();
-        playFailureFeedback();
-        setTrackingMode();
+        startVibration(255);
+        delay(2000);
+        stopVibration();
+        setTrainingMode(true);
         return;
     }
 
@@ -210,8 +212,10 @@ void handleCalibration() {
             calibState = CALIB_IDLE;
             strcpy(lastCalibrationResult, "failed");
             calibrationResultSetAt = millis();
-            playFailureFeedback(); // 3s beep
-            setTrackingMode();     // Back to Tracking
+            startVibration(255);
+            delay(2000);
+            stopVibration();
+            setTrainingMode(true); // Back to Training
             return;
         } else {
             // Stable -> Accumulate
@@ -241,9 +245,11 @@ void handleCalibration() {
         strcpy(lastCalibrationResult, "complete");
         calibrationResultSetAt = millis();
 
-        playCalibrationFeedback(false); // Max intensity beep on completion
+        startVibration(255);
+        delay(1000); // 1-second vibration for success
+        stopVibration();
 
-        // Success -> Auto-Training (silent transition since we just beeped)
+        // Success -> Auto-Training (silent transition)
         setTrainingMode(true);
     }
 }
