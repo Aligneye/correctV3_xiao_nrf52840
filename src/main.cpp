@@ -1,3 +1,4 @@
+// AlignEye Main Entry
 #include <Arduino.h>
 #include <Wire.h>
 
