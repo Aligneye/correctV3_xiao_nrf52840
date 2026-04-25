@@ -117,7 +117,6 @@ void initBattery() {
         voltageSamples[i] = initialV;
     }
     currentVoltage = initialV;
-
     // Initial run to set state immediately. The charger's FULL signal on the
     // blue LED pin (active LOW) wins over the voltage curve — on warm-boot
     // with the charger attached we want to display 100% right away instead
@@ -166,7 +165,6 @@ void updateBattery() {
         Serial.printf("Bat: %.2fV | FULL (blue LED low) | 100%%\n", currentVoltage);
         return;
     }
-
     // 3. Raw Percentage Calculation
     int rawPercent = mapVoltageToPercent(currentVoltage);
 

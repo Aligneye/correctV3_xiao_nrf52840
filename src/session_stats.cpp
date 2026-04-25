@@ -7,6 +7,7 @@
 // currentPatternIndex lives in vibration_therapy.cpp and tracks which pattern
 // the therapy engine is currently playing (0-based into patternSequence).
 extern int currentPatternIndex;
+extern volatile bool deviceConnected;
 
 #if __has_include(<InternalFileSystem.h>)
 #include <Adafruit_LittleFS.h>
@@ -26,7 +27,7 @@ extern bool isBadPosture;
 // -----------------------------------------------------------------------------
 // Minimum time a user must remain in a mode before the session is eligible
 // for persistence. Exit earlier and the in-flight record is discarded.
-static const unsigned long SESSION_PROMOTE_MS = 60000UL;
+static const unsigned long SESSION_PROMOTE_MS = 30000UL;
 
 // Total bytes the on-flash session log is allowed to consume. When a new
 // record would push the file past this cap we discard the oldest records.
@@ -486,16 +487,20 @@ static void finalizeTrainingRecord() {
             }
         }
 
-        StoredSession rec{};
-        rec.type             = SESSION_TYPE_POSTURE;
-        rec.start_ts         = startEpoch;
-        rec.ts_synced        = (startEpoch != 0 && getDeviceTimeStatus() == TIME_FRESH);
-        rec.duration_sec     = clampToU16(durationSec);
-        rec.wrong_count      = slouchCount;
-        rec.wrong_dur_sec    = clampToU16(wrongDur);
-        rec.therapy_pattern  = 0;
-        rec.sent             = false;
-        session_log_append(rec);
+        if (!deviceConnected) {
+            StoredSession rec{};
+            rec.type             = SESSION_TYPE_POSTURE;
+            rec.start_ts         = startEpoch;
+            rec.ts_synced        = (startEpoch != 0 && getDeviceTimeStatus() == TIME_FRESH);
+            rec.duration_sec     = clampToU16(durationSec);
+            rec.wrong_count      = slouchCount;
+            rec.wrong_dur_sec    = clampToU16(wrongDur);
+            rec.therapy_pattern  = 0;
+            rec.sent             = false;
+            session_log_append(rec);
+        } else {
+            Serial.println("BLE live session active - posture not queued for offline sync");
+        }
 
         char stampBuf[24];
         formatEpochUTC(startEpoch, stampBuf, sizeof(stampBuf));
@@ -526,7 +531,7 @@ void onTrainingEnded() {
     } else {
         unsigned long elapsedMs = millis() - trainingEnteredMs;
         Serial.println("----------------------------------------");
-        Serial.printf ("  TRAINING DISCARDED (only %lu s < 60s)\n",
+        Serial.printf ("  TRAINING DISCARDED (only %lu s < 30s)\n",
                        elapsedMs / 1000UL);
         Serial.println("----------------------------------------");
     }
@@ -594,16 +599,20 @@ static void finalizeTherapyRecord() {
         if (patternIdx < 0) patternIdx = 0;
         if (patternIdx > 255) patternIdx = 255;
 
-        StoredSession rec{};
-        rec.type             = SESSION_TYPE_THERAPY;
-        rec.start_ts         = startEpoch;
-        rec.ts_synced        = (startEpoch != 0 && getDeviceTimeStatus() == TIME_FRESH);
-        rec.duration_sec     = clampToU16(durationSec);
-        rec.wrong_count      = 0;
-        rec.wrong_dur_sec    = 0;
-        rec.therapy_pattern  = (uint8_t)patternIdx;
-        rec.sent             = false;
-        session_log_append(rec);
+        if (!deviceConnected) {
+            StoredSession rec{};
+            rec.type             = SESSION_TYPE_THERAPY;
+            rec.start_ts         = startEpoch;
+            rec.ts_synced        = (startEpoch != 0 && getDeviceTimeStatus() == TIME_FRESH);
+            rec.duration_sec     = clampToU16(durationSec);
+            rec.wrong_count      = 0;
+            rec.wrong_dur_sec    = 0;
+            rec.therapy_pattern  = (uint8_t)patternIdx;
+            rec.sent             = false;
+            session_log_append(rec);
+        } else {
+            Serial.println("BLE live session active - therapy not queued for offline sync");
+        }
 
         char stampBuf[24];
         formatEpochUTC(startEpoch, stampBuf, sizeof(stampBuf));
@@ -634,7 +643,7 @@ void onTherapyEnded() {
     } else {
         unsigned long elapsedMs = millis() - therapyEnteredMs;
         Serial.println("----------------------------------------");
-        Serial.printf ("  THERAPY DISCARDED (only %lu s < 60s)\n",
+        Serial.printf ("  THERAPY DISCARDED (only %lu s < 30s)\n",
                        elapsedMs / 1000UL);
         Serial.println("----------------------------------------");
     }
@@ -650,11 +659,11 @@ void onTherapyEnded() {
 void updateSessionStats() {
     unsigned long nowMs = millis();
 
-    // Promote training at the 60 s mark so mode-switches before that discard.
+    // Promote training at the 30 s mark so mode-switches before that discard.
     if (trainingActive && !trainingPromoted) {
         if ((nowMs - trainingEnteredMs) >= SESSION_PROMOTE_MS) {
             trainingPromoted = true;
-            Serial.println(">>> Training 60s reached - will be SAVED on exit <<<");
+            Serial.println(">>> Training 30s reached - will be SAVED on exit <<<");
         }
     }
 
@@ -683,11 +692,11 @@ void updateSessionStats() {
         }
     }
 
-    // Promote therapy at the 60 s mark.
+    // Promote therapy at the 30 s mark.
     if (therapyActive && !therapyPromoted) {
         if ((nowMs - therapyEnteredMs) >= SESSION_PROMOTE_MS) {
             therapyPromoted = true;
-            Serial.println(">>> Therapy 60s reached - will be SAVED on exit <<<");
+            Serial.println(">>> Therapy 30s reached - will be SAVED on exit <<<");
         }
     }
 }

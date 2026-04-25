@@ -28,10 +28,10 @@ static bool bleInitialized = false;
 //   SESSION_ACK   - write only,  app -> device (1 byte = acknowledged index)
 //
 // Flow:
-//   onConnect         : _syncIndex = 0 -> _sendNextSession()
-//   _sendNextSession(): pack unsent[_syncIndex] into 20 bytes, notify.
+//   app writes 0xFF  : _syncIndex = 0 -> _sendNextSession()
+//   _sendNextSession(): pack oldest unsent row into 20 bytes, notify.
 //                       If no unsent sessions remain, purge sent rows.
-//   onSessionACK(idx) : mark fileIndex-of(unsent[idx]) as sent in flash;
+//   onSessionACK(idx) : mark the exact file slot from the last packet as sent;
 //                       _syncIndex++ -> _sendNextSession()
 //
 // We do not mark a session sent or delete it until the app has ACK'd it.
@@ -53,8 +53,16 @@ static BLECharacteristic gSessionDataChar(BLE_UUID_SESSION_DATA);
 static BLECharacteristic gSessionAckChar (BLE_UUID_SESSION_ACK);
 
 // Track where we are in the unsent queue for the *current* BLE connection.
-// Reset to 0 on every onConnect so we always stream from the top.
+// Reset to 0 on every onConnect / app sync request so packet indexes are
+// monotonic for this transfer. The file index is tracked separately because
+// ACKing a row removes it from the unsent subset.
 static int _syncIndex = 0;
+static int _lastSentFileIndex = -1;
+
+// Phone writes this byte to SESSION_ACK after subscribing to SESSION_DATA.
+// That avoids losing the first packet if the connect callback fires before
+// Flutter has finished enabling notifications.
+static const uint8_t SESSION_SYNC_START = 0xFF;
 
 static void _sendNextSession();
 
@@ -80,9 +88,10 @@ static void _sendNextSession() {
 
   StoredSession s{};
   int fileIndex = -1;
-  if (!session_log_get_unsent(_syncIndex, s, fileIndex)) {
+  if (!session_log_get_unsent(0, s, fileIndex)) {
     // No more unsent sessions - now it's safe to reclaim flash by
     // rewriting the file without the sent rows.
+    _lastSentFileIndex = -1;
     session_log_purge_sent();
     Serial.println("BLE SYNC: all sessions delivered, log purged");
     return;
@@ -100,6 +109,7 @@ static void _sendNextSession() {
   packet[13] = s.ts_synced ? 1 : 0;
   // bytes 14..19 left as zero (reserved)
 
+  _lastSentFileIndex = fileIndex;
   bool ok = gSessionDataChar.notify(packet, sizeof(packet));
   Serial.printf("BLE SYNC: tx idx=%d fileIdx=%d type=%u dur=%us notified=%d\n",
                 _syncIndex, fileIndex, (unsigned)s.type,
@@ -112,23 +122,27 @@ static void onSessionAckWrite(uint16_t, BLECharacteristic *, uint8_t *data, uint
   }
 
   uint8_t ackedIndex = data[0];
+  if (ackedIndex == SESSION_SYNC_START) {
+    _syncIndex = 0;
+    _lastSentFileIndex = -1;
+    Serial.printf("BLE SYNC: start requested by app, unsent=%d\n",
+                  session_log_count_unsent());
+    _sendNextSession();
+    return;
+  }
+
   Serial.printf("BLE SYNC: ACK received for idx=%u (current _syncIndex=%d)\n",
                 (unsigned)ackedIndex, _syncIndex);
 
-  // Resolve the ack'd *position in the unsent list* back to its absolute
-  // slot in the on-disk array. Using the live unsent list (before flipping)
-  // keeps us robust to packet reordering or duplicates.
-  StoredSession tmp{};
-  int fileIndex = -1;
-  if (session_log_get_unsent((int)ackedIndex, tmp, fileIndex) && fileIndex >= 0) {
-    session_log_mark_sent(fileIndex);
+  if ((int)ackedIndex == _syncIndex && _lastSentFileIndex >= 0) {
+    session_log_mark_sent(_lastSentFileIndex);
+    _lastSentFileIndex = -1;
+    _syncIndex++;
+    _sendNextSession();
   } else {
-    Serial.printf("BLE SYNC: ACK idx=%u not found in unsent list, ignoring\n",
-                  (unsigned)ackedIndex);
+    Serial.printf("BLE SYNC: ACK idx=%u ignored (expected=%d fileIdx=%d)\n",
+                  (unsigned)ackedIndex, _syncIndex, _lastSentFileIndex);
   }
-
-  _syncIndex++;
-  _sendNextSession();
 }
 
 static void onBleConnect(uint16_t) {
@@ -575,6 +589,36 @@ void sendBLE() {
           (unsigned long)nowEpoch, timeStatus,
           (unsigned long)getDeviceUptimeSeconds(), syncAgeField
       );
+  }
+
+  // --- Active live-session identity ---
+  // s_id/s_elap let the app resume an already-running standalone session
+  // after a late BLE connect instead of creating a row from 0 seconds.
+  if (offset < sizeof(jsonBuffer)) {
+      uint32_t activeSessionId = 0;
+      uint32_t activeElapsedSec = 0;
+      uint32_t activeStartEpoch = 0;
+      uint32_t activeBadCount = 0;
+      if (currentMode == TRAINING) {
+          activeSessionId = getTrainingSessionNumber();
+          activeElapsedSec = getTrainingSessionDurationSec();
+          activeStartEpoch = getLastTrainingStartEpoch();
+          activeBadCount = getTrainingSessionBadPostureCount();
+      } else if (currentMode == THERAPY) {
+          activeSessionId = getTherapySessionNumber();
+          activeElapsedSec = getTherapySessionDurationSec();
+          activeStartEpoch = getLastTherapyStartEpoch();
+      }
+
+      if (activeSessionId > 0 && activeElapsedSec > 0) {
+          offset += snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset,
+              ",\"s_id\":%lu,\"s_elap\":%lu,\"s_start\":%lu,\"s_bad\":%lu",
+              (unsigned long)activeSessionId,
+              (unsigned long)activeElapsedSec,
+              (unsigned long)activeStartEpoch,
+              (unsigned long)activeBadCount
+          );
+      }
   }
 
   // --- Session timestamps + stored-session inventory ---

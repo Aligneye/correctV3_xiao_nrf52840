@@ -95,7 +95,7 @@ extern const unsigned long THERAPY_DURATION;
 #define BLE_SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define BLE_CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 // Device name shown in mobile app scan list. Change here for v2, v3, etc.
-#define BLE_DEVICE_NAME         "correct v1"
+#define BLE_DEVICE_NAME         "aligneye pod"
 
 /******** SHARED DATA ********/
 extern float currentAngle;
