@@ -59,16 +59,25 @@ static BLECharacteristic gSessionAckChar (BLE_UUID_SESSION_ACK);
 static int _syncIndex = 0;
 static int _lastSentFileIndex = -1;
 
+// Multi-packet extension state. After the 20-byte summary packet is sent,
+// we send zero or more 20-byte extension packets carrying the event data
+// (posture timeline or therapy pattern sequence). The app must ACK each
+// extension packet before we send the next. Once all extensions for a
+// session are ACK'd, we advance to the next session.
+static int _extPacketIndex = 0;   // which extension packet to send next
+static int _extPacketTotal = 0;   // total extension packets for current session
+static bool _awaitingExtAck = false;
+
 // Phone writes this byte to SESSION_ACK after subscribing to SESSION_DATA.
 // That avoids losing the first packet if the connect callback fires before
 // Flutter has finished enabling notifications.
 static const uint8_t SESSION_SYNC_START = 0xFF;
 
 static void _sendNextSession();
+static void _sendExtensionPacket();
 
 static void startAdvertising();
 
-// Little-endian packers for the session-data packet.
 static inline void _packU16LE(uint8_t *dst, uint16_t v) {
   dst[0] = (uint8_t)(v & 0xFF);
   dst[1] = (uint8_t)((v >> 8) & 0xFF);
@@ -81,6 +90,53 @@ static inline void _packU32LE(uint8_t *dst, uint32_t v) {
   dst[3] = (uint8_t)((v >> 24) & 0xFF);
 }
 
+// Cached event data for the session currently being synced. Loaded once
+// from flash when _sendNextSession() fires; reused across extension packets
+// so we don't re-read flash for every 20-byte chunk.
+static uint8_t  _evType  = 0;
+static uint8_t  _evCount = 0;
+static uint16_t _evSlouchBuf[MAX_POSTURE_EVENTS];
+static uint16_t _evCorrBuf[MAX_POSTURE_EVENTS];
+static uint8_t  _evPatternBuf[MAX_THERAPY_PATTERNS];
+static bool     _evLoaded = false;
+
+// Load event data for the given session from flash into the cache above.
+static void _loadEventsForSession(const StoredSession& s) {
+    _evType = 0;
+    _evCount = 0;
+    _evLoaded = false;
+
+    if (s.type == SESSION_TYPE_POSTURE && s.start_ts != 0) {
+        PostureEventReadResult pr{};
+        if (session_log_read_posture_events(s.start_ts, pr) && pr.pairCount > 0) {
+            _evType = SESSION_TYPE_POSTURE;
+            _evCount = pr.pairCount;
+            memcpy(_evSlouchBuf, pr.slouchOffsets, pr.pairCount * sizeof(uint16_t));
+            memcpy(_evCorrBuf, pr.correctionOffsets, pr.pairCount * sizeof(uint16_t));
+            _evLoaded = true;
+        }
+    } else if (s.type == SESSION_TYPE_THERAPY && s.start_ts != 0) {
+        TherapyEventReadResult tr{};
+        if (session_log_read_therapy_events(s.start_ts, tr) && tr.count > 0) {
+            _evType = SESSION_TYPE_THERAPY;
+            _evCount = tr.count;
+            memcpy(_evPatternBuf, tr.patterns, tr.count);
+            _evLoaded = true;
+        }
+    }
+}
+
+static int _computeExtPacketCount() {
+    if (!_evLoaded || _evCount == 0) return 0;
+    if (_evType == SESSION_TYPE_POSTURE) {
+        return ((int)_evCount + 3) / 4;
+    }
+    if (_evType == SESSION_TYPE_THERAPY) {
+        return ((int)_evCount + 17) / 18;
+    }
+    return 0;
+}
+
 static void _sendNextSession() {
   if (!deviceConnected) {
     return;
@@ -89,14 +145,30 @@ static void _sendNextSession() {
   StoredSession s{};
   int fileIndex = -1;
   if (!session_log_get_unsent(0, s, fileIndex)) {
-    // No more unsent sessions - now it's safe to reclaim flash by
-    // rewriting the file without the sent rows.
     _lastSentFileIndex = -1;
     session_log_purge_sent();
     Serial.println("BLE SYNC: all sessions delivered, log purged");
     return;
   }
 
+  _lastSentFileIndex = fileIndex;
+  _loadEventsForSession(s);
+  _extPacketTotal = _computeExtPacketCount();
+  _extPacketIndex = 0;
+  _awaitingExtAck = false;
+
+  // 20-byte summary packet (backward compatible with v1):
+  //   [0]      packet index
+  //   [1]      session type
+  //   [2..5]   start_ts (uint32 LE)
+  //   [6..7]   duration_sec (uint16 LE)
+  //   [8..9]   wrong_count (uint16 LE)
+  //   [10..11] wrong_dur_sec (uint16 LE)
+  //   [12]     therapy_pattern (last pattern index)
+  //   [13]     ts_synced (0 or 1)
+  //   [14]     posture_event_count or therapy_pattern_count
+  //   [15]     extension_packet_count
+  //   [16..19] reserved (zero)
   uint8_t packet[20];
   memset(packet, 0, sizeof(packet));
   packet[0]  = (uint8_t)(_syncIndex & 0xFF);
@@ -107,13 +179,53 @@ static void _sendNextSession() {
   _packU16LE(&packet[10], s.wrong_dur_sec);
   packet[12] = s.therapy_pattern;
   packet[13] = s.ts_synced ? 1 : 0;
-  // bytes 14..19 left as zero (reserved)
+  packet[14] = _evLoaded ? _evCount : 0;
+  packet[15] = (uint8_t)(_extPacketTotal & 0xFF);
 
-  _lastSentFileIndex = fileIndex;
   bool ok = gSessionDataChar.notify(packet, sizeof(packet));
-  Serial.printf("BLE SYNC: tx idx=%d fileIdx=%d type=%u dur=%us notified=%d\n",
+  Serial.printf("BLE SYNC: tx idx=%d fileIdx=%d type=%u dur=%us ext=%d notified=%d\n",
                 _syncIndex, fileIndex, (unsigned)s.type,
-                (unsigned)s.duration_sec, ok ? 1 : 0);
+                (unsigned)s.duration_sec, _extPacketTotal, ok ? 1 : 0);
+}
+
+// Extension packet layout (20 bytes):
+//   [0]   0xEE marker
+//   [1]   extension sub-index (0-based)
+//   [2..19] payload
+//
+// Training: up to 4 pairs of (uint16 slouch, uint16 correction) = 16 bytes
+// Therapy:  up to 18 pattern index bytes
+static void _sendExtensionPacket() {
+    if (!deviceConnected || _lastSentFileIndex < 0) return;
+    if (_extPacketIndex >= _extPacketTotal || !_evLoaded) return;
+
+    uint8_t packet[20];
+    memset(packet, 0, sizeof(packet));
+    packet[0] = 0xEE;
+    packet[1] = (uint8_t)(_extPacketIndex & 0xFF);
+
+    if (_evType == SESSION_TYPE_POSTURE) {
+        int startPair = _extPacketIndex * 4;
+        int pairs = (int)_evCount - startPair;
+        if (pairs > 4) pairs = 4;
+        for (int i = 0; i < pairs; i++) {
+            int idx = startPair + i;
+            _packU16LE(&packet[2 + i * 4],     _evSlouchBuf[idx]);
+            _packU16LE(&packet[2 + i * 4 + 2], _evCorrBuf[idx]);
+        }
+    } else if (_evType == SESSION_TYPE_THERAPY) {
+        int startIdx = _extPacketIndex * 18;
+        int count = (int)_evCount - startIdx;
+        if (count > 18) count = 18;
+        for (int i = 0; i < count; i++) {
+            packet[2 + i] = _evPatternBuf[startIdx + i];
+        }
+    }
+
+    _awaitingExtAck = true;
+    bool ok = gSessionDataChar.notify(packet, sizeof(packet));
+    Serial.printf("BLE SYNC: ext[%d/%d] type=%u notified=%d\n",
+                  _extPacketIndex, _extPacketTotal, (unsigned)_evType, ok ? 1 : 0);
 }
 
 static void onSessionAckWrite(uint16_t, BLECharacteristic *, uint8_t *data, uint16_t len) {
@@ -125,9 +237,30 @@ static void onSessionAckWrite(uint16_t, BLECharacteristic *, uint8_t *data, uint
   if (ackedIndex == SESSION_SYNC_START) {
     _syncIndex = 0;
     _lastSentFileIndex = -1;
+    _extPacketIndex = 0;
+    _extPacketTotal = 0;
+    _awaitingExtAck = false;
     Serial.printf("BLE SYNC: start requested by app, unsent=%d\n",
                   session_log_count_unsent());
     _sendNextSession();
+    return;
+  }
+
+  // Extension packet ACK: app writes 0xEE to acknowledge the last extension.
+  if (ackedIndex == 0xEE && _awaitingExtAck && _lastSentFileIndex >= 0) {
+    _awaitingExtAck = false;
+    _extPacketIndex++;
+    Serial.printf("BLE SYNC: ext ACK received, next ext=%d/%d\n",
+                  _extPacketIndex, _extPacketTotal);
+    if (_extPacketIndex < _extPacketTotal) {
+        _sendExtensionPacket();
+    } else {
+        // All extensions delivered for this session -> mark sent, advance.
+        session_log_mark_sent(_lastSentFileIndex);
+        _lastSentFileIndex = -1;
+        _syncIndex++;
+        _sendNextSession();
+    }
     return;
   }
 
@@ -135,10 +268,17 @@ static void onSessionAckWrite(uint16_t, BLECharacteristic *, uint8_t *data, uint
                 (unsigned)ackedIndex, _syncIndex);
 
   if ((int)ackedIndex == _syncIndex && _lastSentFileIndex >= 0) {
-    session_log_mark_sent(_lastSentFileIndex);
-    _lastSentFileIndex = -1;
-    _syncIndex++;
-    _sendNextSession();
+    if (_extPacketTotal > 0) {
+        // Summary ACK'd but we have extension packets to send first.
+        _extPacketIndex = 0;
+        _sendExtensionPacket();
+    } else {
+        // No extensions needed — mark sent immediately and move on.
+        session_log_mark_sent(_lastSentFileIndex);
+        _lastSentFileIndex = -1;
+        _syncIndex++;
+        _sendNextSession();
+    }
   } else {
     Serial.printf("BLE SYNC: ACK idx=%u ignored (expected=%d fileIdx=%d)\n",
                   (unsigned)ackedIndex, _syncIndex, _lastSentFileIndex);
@@ -169,6 +309,9 @@ static void onBleConnect(uint16_t) {
   // app hasn't subscribed yet, the notify will silently no-op and we'll
   // retry from ACKs or the next reconnect.
   _syncIndex = 0;
+  _extPacketIndex = 0;
+  _extPacketTotal = 0;
+  _awaitingExtAck = false;
   int unsent = session_log_count_unsent();
   Serial.printf("BLE SYNC: connect with %d unsent session(s)\n", unsent);
   if (unsent > 0) {
@@ -621,26 +764,19 @@ void sendBLE() {
       }
   }
 
-  // --- Session timestamps + stored-session inventory ---
+  // --- Session timestamps + offline session count ---
   // Omitted in THERAPY mode to keep the JSON under the 512-byte BLE cap while
   // leaving room for the live therapy fields (t_patt/t_next/t_elap/t_rem).
-  // The phone retains the most recent tr_/th_ values received during TRACKING
-  // and TRAINING, so losing them for the duration of a therapy session is
-  // harmless.
-  //
-  // `sess_stored`: count of completed session records currently in /sess.log.
-  // `sess_bytes`:  byte size of /sess.log (for download-progress hints).
   if (currentMode != THERAPY && offset < sizeof(jsonBuffer)) {
       offset += snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset,
           ",\"tr_start\":%lu,\"tr_end\":%lu,"
           "\"th_start\":%lu,\"th_end\":%lu,"
-          "\"sess_stored\":%lu,\"sess_bytes\":%lu",
+          "\"sess_pending\":%d",
           (unsigned long)getLastTrainingStartEpoch(),
           (unsigned long)getLastTrainingEndEpoch(),
           (unsigned long)getLastTherapyStartEpoch(),
           (unsigned long)getLastTherapyEndEpoch(),
-          (unsigned long)getStoredSessionCount(),
-          (unsigned long)getStoredSessionLogBytes()
+          session_log_count_unsent()
       );
   }
 

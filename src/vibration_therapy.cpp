@@ -94,6 +94,23 @@ uint16_t getTherapyUniquePatternCount() {
   return count;
 }
 
+int getTherapyPatternSequence(uint8_t* outBuf, int maxCount) {
+  if (!patternsInitialized || totalPatterns <= 0 || outBuf == nullptr) return 0;
+  int toCopy = totalPatterns;
+  if (toCopy > maxCount) toCopy = maxCount;
+  for (int i = 0; i < toCopy; i++) {
+    outBuf[i] = (uint8_t)patternSequence[i];
+  }
+  return toCopy;
+}
+
+const char* getPatternNameByIndex(int patternIndex) {
+  if (patternIndex >= 0 && patternIndex < PATTERN_COUNT) {
+    return PATTERN_NAMES[patternIndex];
+  }
+  return "Unknown";
+}
+
 // --- Non-blocking Haptic State Machine ---
 enum HapticSequence {
   HAPTIC_NONE,

@@ -41,4 +41,12 @@ uint16_t getTherapyUniquePatternCount();
 // once even if it dominates the whole session). Range: 0..totalPatterns.
 uint16_t getTherapyTotalPatternCount();
 
+// Copy the current therapy pattern sequence into outBuf (up to maxCount).
+// Returns the number of entries written. Each entry is a TherapyPattern
+// enum value (0..13). Call before resetAllOutputs() tears down the state.
+int getTherapyPatternSequence(uint8_t* outBuf, int maxCount);
+
+// Get the human-readable name for a pattern index (0..PATTERN_COUNT-1).
+const char* getPatternNameByIndex(int patternIndex);
+
 extern volatile bool isProvidingFeedback;
