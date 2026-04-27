@@ -3,9 +3,9 @@
 #include "device_time.h"
 #include "vibration_therapy.h"
 #include "session_log.h"
+#include "bluetooth_manager.h"
 
 extern int currentPatternIndex;
-extern volatile bool deviceConnected;
 
 #if __has_include(<InternalFileSystem.h>)
 #include <Adafruit_LittleFS.h>
@@ -214,13 +214,13 @@ void onTrainingStarted() {
 static void finalizeTrainingRecord() {
     unsigned long elapsedMs = millis() - trainingEnteredMs;
     uint32_t durationSec    = (uint32_t)(elapsedMs / 1000UL);
-    uint32_t startEpoch     = nowEpochOrBackfill(trainingStartTicks);
+    uint32_t nowEpoch       = getDeviceTime();
+    uint32_t startEpoch     = 0;
 
-    if (startEpoch == 0) {
-        uint32_t nowEpoch = getDeviceTime();
-        if (nowEpoch != 0 && nowEpoch >= durationSec) {
-            startEpoch = nowEpoch - durationSec;
-        }
+    if (nowEpoch != 0 && nowEpoch >= durationSec) {
+        startEpoch = nowEpoch - durationSec;
+    } else {
+        startEpoch = ticksToEpoch(trainingStartTicks);
     }
 
     state.trainingSessionCount++;
@@ -244,7 +244,7 @@ static void finalizeTrainingRecord() {
         }
     }
 
-    if (!deviceConnected) {
+    {
         StoredSession rec{};
         rec.type             = SESSION_TYPE_POSTURE;
         rec.start_ts         = startEpoch;
@@ -259,8 +259,7 @@ static void finalizeTrainingRecord() {
         session_log_write_training_events(
             startEpoch, slouchBuf, correctionBuf,
             slouchCount, correctionCount);
-    } else {
-        Serial.println("BLE live session active - posture not queued for offline sync");
+        notifyNewSessionStored();
     }
 
     char stampBuf[24];
@@ -317,12 +316,13 @@ void onTherapyStarted() {
 static void finalizeTherapyRecord() {
     unsigned long elapsedMs = millis() - therapyEnteredMs;
     uint32_t durationSec    = (uint32_t)(elapsedMs / 1000UL);
-    uint32_t startEpoch     = nowEpochOrBackfill(therapyStartTicks);
-    if (startEpoch == 0) {
-        uint32_t nowEpoch = getDeviceTime();
-        if (nowEpoch != 0 && nowEpoch >= durationSec) {
-            startEpoch = nowEpoch - durationSec;
-        }
+    uint32_t nowEpoch       = getDeviceTime();
+    uint32_t startEpoch     = 0;
+
+    if (nowEpoch != 0 && nowEpoch >= durationSec) {
+        startEpoch = nowEpoch - durationSec;
+    } else {
+        startEpoch = ticksToEpoch(therapyStartTicks);
     }
 
     uint16_t uniquePatterns = getTherapyUniquePatternCount();
@@ -338,7 +338,7 @@ static void finalizeTherapyRecord() {
     if (patternIdx < 0) patternIdx = 0;
     if (patternIdx > 255) patternIdx = 255;
 
-    if (!deviceConnected) {
+    {
         StoredSession rec{};
         rec.type             = SESSION_TYPE_THERAPY;
         rec.start_ts         = startEpoch;
@@ -356,8 +356,7 @@ static void finalizeTherapyRecord() {
             session_log_write_therapy_events(
                 startEpoch, seqBuf, (uint8_t)seqLen);
         }
-    } else {
-        Serial.println("BLE live session active - therapy not queued for offline sync");
+        notifyNewSessionStored();
     }
 
     char stampBuf[24];

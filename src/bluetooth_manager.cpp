@@ -639,6 +639,20 @@ void deinitBLE() {
   delay(200); // Allow time for radio shutdown
 }
 
+void notifyNewSessionStored() {
+  if (!deviceConnected) return;
+  int unsent = session_log_count_unsent();
+  if (unsent <= 0) return;
+  Serial.printf("BLE SYNC: new session stored while connected, unsent=%d\n", unsent);
+  // The app will re-trigger sync on the next connect or the app can write
+  // 0xFF to SESSION_ACK to restart. We kick off _sendNextSession() only if
+  // no sync is already in progress (no pending ACK outstanding).
+  if (_lastSentFileIndex < 0 && !_awaitingExtAck) {
+    _syncIndex = 0;
+    _sendNextSession();
+  }
+}
+
 void sendBLE() {
   if (!pCharacteristic) {
     return;
@@ -745,15 +759,17 @@ void sendBLE() {
       if (currentMode == TRAINING) {
           activeSessionId = getTrainingSessionNumber();
           activeElapsedSec = getTrainingSessionDurationSec();
-          activeStartEpoch = getLastTrainingStartEpoch();
           activeBadCount = getTrainingSessionBadPostureCount();
       } else if (currentMode == THERAPY) {
           activeSessionId = getTherapySessionNumber();
           activeElapsedSec = getTherapySessionDurationSec();
-          activeStartEpoch = getLastTherapyStartEpoch();
       }
 
       if (activeSessionId > 0 && activeElapsedSec > 0) {
+          uint32_t nowEpochLive = getDeviceTime();
+          if (nowEpochLive != 0 && nowEpochLive >= activeElapsedSec) {
+              activeStartEpoch = nowEpochLive - activeElapsedSec;
+          }
           offset += snprintf(jsonBuffer + offset, sizeof(jsonBuffer) - offset,
               ",\"s_id\":%lu,\"s_elap\":%lu,\"s_start\":%lu,\"s_bad\":%lu",
               (unsigned long)activeSessionId,
