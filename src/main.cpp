@@ -35,11 +35,6 @@ void initWatchdogTimer() {
   int timeoutMs = (int)WATCHDOG_TIMEOUT_S * 1000;
   int enabledMs = Watchdog.enable(timeoutMs);
   watchdogEnabled = enabledMs > 0;
-  if (watchdogEnabled) {
-    Serial.printf("Watchdog enabled: %d ms\n", enabledMs);
-  } else {
-    Serial.println("Watchdog unavailable on this target.");
-  }
 }
 
 void feedWatchdog() {
@@ -51,12 +46,10 @@ void feedWatchdog() {
 bool wokeFromButtonSleep() {
 #if defined(ARDUINO_ARCH_ESP32)
   esp_sleep_wakeup_cause_t wakeReason = esp_sleep_get_wakeup_cause();
-  Serial.printf("Wake reason: %d\n", wakeReason);
   return wakeReason == ESP_SLEEP_WAKEUP_GPIO;
 #else
   uint32_t reason = NRF_POWER->RESETREAS;
   bool fromSystemOff = (reason & POWER_RESETREAS_OFF_Msk) != 0;
-  Serial.printf("Reset reason: 0x%08lx\n", (unsigned long)reason);
   NRF_POWER->RESETREAS = reason; // Clear latched bits.
   return fromSystemOff;
 #endif
@@ -66,8 +59,7 @@ bool wokeFromButtonSleep() {
 void setup() {
   Serial.begin(115200);
   delay(1000); // Startup delay for power stabilization
-  Serial.println("\n\n=== AlignEye Booting ===");
-  
+
   // Seed PRNG for therapy pattern selection.
   randomSeed(micros() ^ (unsigned long)analogRead(BATTERY_PIN));
 
@@ -99,7 +91,6 @@ void setup() {
   initPostureSensor();
   if (!sensorInitialized) {
     // Sensor Error Trap
-    Serial.println("ERROR: Posture sensor not found!");
     while (1) {
       digitalWrite(LED_ERROR_PIN, LED_ON); 
       delay(100);
@@ -108,7 +99,6 @@ void setup() {
       feedWatchdog();
     }
   }
-  Serial.println("Posture sensor initialized.");
 
   // watchdog Init
   initWatchdogTimer();
@@ -133,96 +123,26 @@ void setup() {
     // Fresh boot (power cycle or upload) - always start ON
     currentState = POWER_ON;
     setTrackingMode();
-    Serial.println("Fresh boot - starting in POWER_ON state");
   }
-  
-  Serial.printf("Current state: %s\n", currentState == POWER_ON ? "POWER_ON" : "POWER_OFF");
-  
+
   if (currentState == POWER_ON) {
     initBLE();
-    Serial.println("BLE initialized.");
   }
-  
+
   // Load saved settings
   currentTrainingDelay = loadTrainingDelay();
-  Serial.printf("Loaded Training Delay: %d\n", currentTrainingDelay);
 }
 
 // ... (setup)
-
-unsigned long lastSerialPrint = 0;
-unsigned long lastClockPrint = 0;
-
-// Returns a short human-readable label for the current operating mode.
-static const char* modeLabel() {
-  switch (currentMode) {
-    case TRACKING: return "TRACKING";
-    case TRAINING: return "TRAINING";
-    case THERAPY:  return "THERAPY";
-    default:       return "UNKNOWN";
-  }
-}
 
 void loop() {
   handleButton();
   updateBattery(); // Update battery logic
 
-  // ── 1-second status print (TRACKING only) ────────────────────────────────
-  if (currentMode == TRACKING && millis() - lastSerialPrint >= 1000UL) {
-    lastSerialPrint = millis();
-
-    const char *postureStr = isBadPosture ? "BAD " : "GOOD";
-    Serial.printf(
-      "[%lus] Bat: %.2fV %d%% | Angle: %.2f | Posture: %s | Mode: %s | State: %s\n",
-      (unsigned long)(millis() / 1000),
-      getBatteryVoltage(),
-      getBatteryPercentage(),
-      currentAngle,
-      postureStr,
-      modeLabel(),
-      currentState == POWER_ON ? "ON" : "OFF"
-    );
-  }
-  // ─────────────────────────────────────────────────────────────────────────
-
   // Time subsystem maintenance: periodic flash persistence + late-sync backfill
   // of any session timestamps that were captured before the phone synced time.
   maintainDeviceTime();
   maintainSessionStats();
-
-  // Wall-clock debug print (every 30s). Less noisy than the sensor/BLE output.
-  if (millis() - lastClockPrint > 30000UL) {
-      lastClockPrint = millis();
-      uint32_t nowEpoch = getDeviceTime();
-      char utcBuf[24];
-      char localBuf[32];
-      formatEpochUTC(nowEpoch, utcBuf, sizeof(utcBuf));
-      formatEpochLocal(nowEpoch, localBuf, sizeof(localBuf));
-      const char *statusStr = "unknown";
-      switch (getDeviceTimeStatus()) {
-        case TIME_FRESH: statusStr = "fresh"; break;
-        case TIME_STALE: statusStr = "stale"; break;
-        case TIME_UNKNOWN:
-        default:         statusStr = "unknown"; break;
-      }
-      uint32_t syncAgeRaw = getSecondsSinceSync();
-      if (syncAgeRaw == UINT32_MAX) {
-        Serial.printf("Clock: %s UTC (local %s) | epoch=%lu | status=%s | up=%lus | sync=never | power=%s\n",
-                      utcBuf, localBuf,
-                      (unsigned long)nowEpoch,
-                      statusStr,
-                      (unsigned long)getDeviceUptimeSeconds(),
-                      currentState == POWER_ON ? "ON" : "IDLE");
-      } else {
-        Serial.printf("Clock: %s UTC (local %s) | epoch=%lu | status=%s | up=%lus | sync_age=%lus | power=%s\n",
-                      utcBuf, localBuf,
-                      (unsigned long)nowEpoch,
-                      statusStr,
-                      (unsigned long)getDeviceUptimeSeconds(),
-                      (unsigned long)syncAgeRaw,
-                      currentState == POWER_ON ? "ON" : "IDLE");
-      }
-  }
 
   handleCalibration(); // Check calibration state first
   

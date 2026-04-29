@@ -60,7 +60,6 @@ void initAutoOff() {
     wasMoving = false;
     lastAngle = 0.0f;
     angleInitialized = false;
-    Serial.println("AutoOff: Timer Initialized");
 }
 
 // Safe time difference calculation that handles millis() overflow
@@ -136,26 +135,9 @@ void checkAutoOff() {
         lastActivityTime = now;
     }
 
-    // ---------------- DEBUG LOGGING (Every 5s) ----------------
-    static unsigned long lastDebug = 0;
-    if (safeTimeDiff(now, lastDebug) > 5000) {
-        lastDebug = now;
-        unsigned long elapsed = safeTimeDiff(now, lastActivityTime);
-        long remaining = (AUTO_OFF_DURATION_MS > elapsed) ?
-                         (long)((AUTO_OFF_DURATION_MS - elapsed) / 1000) : 0L;
-
-        Serial.printf("AutoOff: %lds left | Moving:%d BLE:%d Btn:%d Angle:%.1f\n",
-                      remaining,
-                      (int)currentlyMoving,
-                      (int)deviceConnected,
-                      (int)lastButtonEvent,
-                      currentAngle);
-    }
-
     // ---------------- TRIGGER SLEEP ----------------
     unsigned long elapsed = safeTimeDiff(now, lastActivityTime);
     if (elapsed >= AUTO_OFF_DURATION_MS) {
-        Serial.println("AutoOff: Time Limit Reached. Powering Down...");
         powerOff();
         return;
     }
@@ -183,11 +165,6 @@ void powerOff() {
   //   - Higher idle current (~a few µA more).
   //   - Wake is instant on button press (no reset).
   //   - Wall clock (device_time) stays continuous through sleep.
-  char stampBuf[24];
-  uint32_t nowEpoch = getDeviceTime();
-  formatEpochUTC(nowEpoch, stampBuf, sizeof(stampBuf));
-  Serial.printf("--- ENTERING LOW-POWER IDLE (time=%s UTC, RTC keeps running) ---\n", stampBuf);
-
   // Persist current time. Covers the pathological case of the battery being
   // removed while we're "off" (we still want a best-effort last-known time
   // on the next boot).

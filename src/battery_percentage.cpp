@@ -162,7 +162,6 @@ void updateBattery() {
         waitingForFullCharge    = false;
         fullChargeTimerStart    = 0;
         lowBatteryTimerActive   = false;
-        Serial.printf("Bat: %.2fV | FULL (blue LED low) | 100%%\n", currentVoltage);
         return;
     }
     // 3. Raw Percentage Calculation
@@ -209,16 +208,12 @@ void updateBattery() {
 
     currentBatteryPercent = displayedPercent;
 
-    const char* status = isCharging ? "CHRG" : "BATT";
-    Serial.printf("Bat: %.2fV | %s | %d%%\n", currentVoltage, status, currentBatteryPercent);
-
     // Deep Sleep Protection (0% or < 3.2V)
     if ((currentBatteryPercent == 0 || currentVoltage <= 3.2f) && !isCharging) {
         if (!lowBatteryTimerActive) {
             lowBatteryTimerStart = now;
             lowBatteryTimerActive = true;
         } else if (now - lowBatteryTimerStart > LOW_BATTERY_SHUTDOWN_TIME_MS) {
-            Serial.println("CRITICAL BATTERY: Shutting down...");
             Serial.flush();
             powerOff();
         }

@@ -92,7 +92,6 @@ const char *getCalibrationPhase() {
 
 void startCalibration() {
     if (calibState != CALIB_IDLE) {
-        Serial.printf("CALIBRATION: Start ignored - state is %d (not IDLE)\n", calibState);
         return;
     }
 
@@ -100,7 +99,6 @@ void startCalibration() {
     lastCalibrationResult[0] = '\0';
     calibrationResultSetAt = 0;
 
-    Serial.println("CALIBRATION: Starting new calibration");
     playCalibrationFeedback(true); // Max intensity beep on start
 
     calibState = CALIB_HOLD;
@@ -120,8 +118,6 @@ void startCalibration() {
     lastCalibX = e.acceleration.x;
     lastCalibY = e.acceleration.y;
     lastCalibZ = e.acceleration.z;
-
-    Serial.println("CALIBRATION: START");
 }
 
 void cancelCalibration() {
@@ -129,7 +125,6 @@ void cancelCalibration() {
 
     calibState = CALIB_IDLE;
     stopVibration();
-    Serial.println("CALIBRATION: CANCELLED");
 
     // Switch to Training Mode on Cancel
     setTrainingMode();
@@ -156,7 +151,6 @@ void handleCalibration() {
 
     // 0. SAFETY TIMEOUT (10 Seconds)
     if (elapsed > 10000) {
-        Serial.println("CALIB: TIMEOUT - Failed");
         calibState = CALIB_IDLE;
         strcpy(lastCalibrationResult, "failed");
         calibrationResultSetAt = millis();
@@ -171,7 +165,6 @@ void handleCalibration() {
     if (elapsed < CALIB_GET_READY_MS) {
         if (currentMillis - lastBeepTime >= 1000) {
             lastBeepTime = currentMillis;
-            Serial.printf("CALIB: Getting Ready... %lu ms\n", elapsed);
             playButtonFeedback(); // Ticking beep during countdown
         }
 
@@ -208,7 +201,6 @@ void handleCalibration() {
 
         if (movement > CALIB_THRESHOLD) {
             // User moved! FAIL immediately.
-            Serial.println("CALIB: BAD MOVEMENT - Failed");
             calibState = CALIB_IDLE;
             strcpy(lastCalibrationResult, "failed");
             calibrationResultSetAt = millis();
@@ -231,15 +223,10 @@ void handleCalibration() {
         // Safety Lock
         if (sampleCount < CALIB_MIN_SAMPLES) return;
 
-        Serial.println("");
-
         // Calculate & Save
         float avgY = (sampleCount > 0) ? (sumY / sampleCount) : 0;
         float avgZ = (sampleCount > 0) ? (sumZ / sampleCount) : 0;
         setPostureOrigin(avgY, avgZ);
-
-        Serial.printf("CALIBRATION: DONE. Samples:%d -> AvgY:%.2f AvgZ:%.2f\n",
-                      sampleCount, avgY, avgZ);
 
         calibState = CALIB_IDLE;
         strcpy(lastCalibrationResult, "complete");

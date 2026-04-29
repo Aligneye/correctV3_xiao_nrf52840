@@ -25,7 +25,6 @@ static void loadStoredCalibration() {
     }
     Y_ORIGIN = loadedY;
     Z_ORIGIN = loadedZ;
-    Serial.printf("CALIB LOADED -> Y:%.2f Z:%.2f\n", Y_ORIGIN, Z_ORIGIN);
 }
 
 void setPostureOrigin(float y, float z) {
@@ -38,7 +37,6 @@ void setPostureOrigin(float y, float z) {
     Z_ORIGIN = z;
 
     saveCalibration(Y_ORIGIN, Z_ORIGIN);
-    Serial.println("CALIB SAVED to storage");
 }
 
 float currentAngle = 0.0;
@@ -62,11 +60,9 @@ void initPostureSensor() {
       loadStoredCalibration();
       return;
     }
-    Serial.printf("Sensor init attempt %d failed. Retrying...\n", i + 1);
     delay(200);
   }
 
-  Serial.println("LIS3DH ERROR: Sensor not found after 5 attempts.");
   sensorInitialized = false;
 }
 
@@ -173,13 +169,6 @@ void updatePostureAngle() {
       }
   }
 
-  // Non-blocking Debug Print
-  static unsigned long lastPrint = 0;
-  if (millis() - lastPrint > 1000) {
-      lastPrint = millis();
-      Serial.printf("Angle: %.2f | Status: %s | Direction: %s\n", 
-                    currentAngle, postureText.c_str(), directionText.c_str());
-  }
 }
 
 void sleepPostureSensor() {

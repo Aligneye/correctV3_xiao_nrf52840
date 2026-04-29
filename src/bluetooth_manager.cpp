@@ -288,20 +288,6 @@ static void onSessionAckWrite(uint16_t, BLECharacteristic *, uint8_t *data, uint
 static void onBleConnect(uint16_t) {
   deviceConnected = true;
 
-  char stampBuf[24];
-  uint32_t nowEpoch = getDeviceTime();
-  formatEpochUTC(nowEpoch, stampBuf, sizeof(stampBuf));
-  const char *statusStr = "unknown";
-  switch (getDeviceTimeStatus()) {
-    case TIME_FRESH: statusStr = "fresh"; break;
-    case TIME_STALE: statusStr = "stale"; break;
-    case TIME_UNKNOWN:
-    default:         statusStr = "unknown"; break;
-  }
-  Serial.printf("BLE Connected. Device time=%s UTC (%s). "
-                "Awaiting TIME=<epoch> from app if needed.\n",
-                stampBuf, statusStr);
-
   playButtonFeedback(); // Feedback on connect
 
   // Kick off session sync. We defer the actual notify by a few hundred ms
@@ -326,10 +312,6 @@ static void onBleConnect(uint16_t) {
 static void onBleDisconnect(uint16_t, uint8_t) {
   deviceConnected = false;
 
-  char stampBuf[24];
-  formatEpochUTC(getDeviceTime(), stampBuf, sizeof(stampBuf));
-  Serial.printf("BLE Disconnected. Device time=%s UTC\n", stampBuf);
-
   playButtonFeedback(); // Feedback on disconnect
   startAdvertising();
 }
@@ -343,19 +325,16 @@ static void applyTrainingTiming(const String &valueRaw) {
     if (currentTrainingDelay != TRAIN_INSTANT) {
       currentTrainingDelay = TRAIN_INSTANT;
       saveTrainingDelay(currentTrainingDelay);
-      Serial.println("BLE CMD: POSTURE_TIMING=INSTANT");
     }
   } else if (value == "DELAYED") {
     if (currentTrainingDelay != TRAIN_DELAYED) {
       currentTrainingDelay = TRAIN_DELAYED;
       saveTrainingDelay(currentTrainingDelay);
-      Serial.println("BLE CMD: POSTURE_TIMING=DELAYED");
     }
   } else if (value == "AUTOMATIC") {
     if (currentTrainingDelay != TRAIN_AUTOMATIC) {
       currentTrainingDelay = TRAIN_AUTOMATIC;
       saveTrainingDelay(currentTrainingDelay);
-      Serial.println("BLE CMD: POSTURE_TIMING=AUTOMATIC");
     }
   }
 }
@@ -374,13 +353,11 @@ static void applyTherapyDurationMinutes(const String &valueRaw) {
   }
 
   therapyDuration = (unsigned long)mins * 60000UL;
-  Serial.printf("BLE CMD: THERAPY_DURATION_MIN=%d\n", mins);
 }
 
 static void applyMode(const String &valueRaw) {
   // Prevent mode switching during calibration - it will complete and switch to TRAINING automatically
   if (isCalibrating()) {
-    Serial.println("BLE CMD: MODE change ignored - calibration in progress");
     return;
   }
 
@@ -391,17 +368,14 @@ static void applyMode(const String &valueRaw) {
   if (value == "TRACKING") {
     if (currentMode != TRACKING) {
       setTrackingMode();
-      Serial.println("BLE CMD: MODE=TRACKING");
     }
   } else if (value == "TRAINING" || value == "POSTURE") {
     if (currentMode != TRAINING) {
       setTrainingMode();
-      Serial.println("BLE CMD: MODE=TRAINING");
     }
   } else if (value == "THERAPY") {
     if (currentMode != THERAPY) {
       setTherapyMode();
-      Serial.println("BLE CMD: MODE=THERAPY");
     }
   }
 }
@@ -413,18 +387,14 @@ static void applyCalibrationControl(const String &valueRaw) {
 
   if (value == "START") {
     if (isCalibrating()) {
-      Serial.println("BLE CMD: CALIBRATION START ignored - already calibrating");
       return;
     }
     requestCalibrationStart();  // Defer to main loop - avoids blocking BLE callback
-    Serial.println("BLE CMD: CALIBRATION START");
   } else if (value == "CANCEL") {
     if (!isCalibrating()) {
-      Serial.println("BLE CMD: CALIBRATION CANCEL ignored - not calibrating");
       return;
     }
     requestCalibrationCancel();
-    Serial.println("BLE CMD: CALIBRATION CANCEL");
   }
 }
 
@@ -440,7 +410,6 @@ static void applyTimeSync(const String &valueRaw) {
   const uint32_t MIN_EPOCH = 1704067200UL; // 2024-01-01 UTC
   const uint32_t MAX_EPOCH = 4102444800UL; // 2100-01-01 UTC
   if (epoch < MIN_EPOCH || epoch > MAX_EPOCH) {
-    Serial.printf("BLE CMD: TIME=%lu rejected (out of range)\n", (unsigned long)epoch);
     return;
   }
   setDeviceTime(epoch);
@@ -456,13 +425,9 @@ static void applyTZOffset(const String &valueRaw) {
   int32_t offset = (int32_t) strtol(value.c_str(), nullptr, 10);
   // Sanity: valid range is -14h to +14h in seconds.
   if (offset < -50400 || offset > 50400) {
-    Serial.printf("BLE CMD: TZ=%ld rejected (out of range)\n", (long)offset);
     return;
   }
   setDeviceTZOffset(offset);
-  int absOff = (offset < 0) ? -offset : offset;
-  Serial.printf("BLE CMD: TZ=%c%02d:%02d stored\n",
-                (offset < 0 ? '-' : '+'), absOff / 3600, (absOff % 3600) / 60);
 }
 
 static void applyAction(const String &valueRaw) {
@@ -472,21 +437,16 @@ static void applyAction(const String &valueRaw) {
 
   if (value == "CALIBRATE") {
     if (isCalibrating()) {
-      Serial.println("BLE CMD: ACTION=CALIBRATE ignored - already calibrating");
       return;
     }
     requestCalibrationStart();
-    Serial.println("BLE CMD: ACTION=CALIBRATE");
   } else if (value == "CALIBRATE_CANCEL") {
     if (!isCalibrating()) {
-      Serial.println("BLE CMD: ACTION=CALIBRATE_CANCEL ignored - not calibrating");
       return;
     }
     requestCalibrationCancel();
-    Serial.println("BLE CMD: ACTION=CALIBRATE_CANCEL");
   } else if (value == "RESET_STATS") {
     resetAllSessionCounters();
-    Serial.println("BLE CMD: ACTION=RESET_STATS");
   }
 }
 
@@ -557,8 +517,6 @@ static void onCharacteristicWrite(uint16_t, BLECharacteristic *, uint8_t *data, 
     payload += (char)data[i];
   }
 
-  Serial.print("BLE RX CMD: ");
-  Serial.println(payload);
   parseAndApplyBleCommand(payload);
 }
 
@@ -579,9 +537,6 @@ static void startAdvertising() {
 }
 
 void initBLE() {
-  Serial.print("Initializing BLE as: ");
-  Serial.println(BLE_DEVICE_NAME);
-
   if (!bleInitialized) {
     Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
     Bluefruit.begin(1, 0);
@@ -823,14 +778,8 @@ void sendBLE() {
   // Send if connected
   if (deviceConnected) {
     pCharacteristic->write(jsonBuffer);
-    bool sent = pCharacteristic->notify(jsonBuffer);
-    Serial.print(sent ? "[BLE SENT] " : "[BLE BUSY] ");
-  } else {
-    Serial.print("[WAITING]  ");
+    pCharacteristic->notify(jsonBuffer);
   }
-
-  // Print JSON to Serial as requested
-  Serial.println(jsonBuffer);
 }
 
 

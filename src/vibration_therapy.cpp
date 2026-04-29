@@ -260,7 +260,6 @@ void playCalibrationFeedback(bool isStart) {
 }
 
 void setTrackingMode(bool silent) {
-  Serial.println("TRACKING");
   // End any active sessions
   onTrainingEnded();
   onTherapyEnded();
@@ -274,7 +273,6 @@ void setTrackingMode(bool silent) {
 }
 
 void setTrainingMode(bool silent) {
-  Serial.println("Posture TRAINING");
   // End therapy session if active, start training session
   onTherapyEnded();
   currentMode = TRAINING;
@@ -288,7 +286,6 @@ void setTrainingMode(bool silent) {
 }
 
 void setTherapyMode() {
-  Serial.println("THERAPY (Started)");
   // End training session if active, start therapy session
   onTrainingEnded();
   resetAllOutputs();
@@ -317,17 +314,14 @@ unsigned long lastAutoTick = 0;
 void cycleTrainingDelay() {
   if (currentTrainingDelay == TRAIN_INSTANT) {
     currentTrainingDelay = TRAIN_DELAYED;
-    Serial.println("SETTING: DELAYED (Wait 5s)");
     playDoubleBeep();
   } else if (currentTrainingDelay == TRAIN_DELAYED) {
     currentTrainingDelay = TRAIN_AUTOMATIC;
-    Serial.println("SETTING: AUTOMATIC");
     playButtonFeedback();
     delay(100);
     playButtonFeedback();
   } else {
     currentTrainingDelay = TRAIN_INSTANT;
-    Serial.println("SETTING: INSTANT");
     playButtonFeedback();
   }
 
@@ -362,16 +356,10 @@ void handleTraining(unsigned long now) {
       }
 
       if (now - autoStatStartTime >= 60000) {
-        Serial.printf("AUTO STATS: Bad Posture %lu ms / 60000 ms\n",
-                      badPostureAccumulator);
-
         if (badPostureAccumulator > 15000) {
           autoModeInstant = true;
-          Serial.println(
-              "AUTO DECISION: Switch to INSTANT (Too much bad posture)");
         } else {
           autoModeInstant = false;
-          Serial.println("AUTO DECISION: Switch to DELAYED (Good posture)");
         }
 
         autoStatStartTime = now;
@@ -415,13 +403,10 @@ void handleTraining(unsigned long now) {
 void cycleTherapyDuration() {
   if (therapyDuration == 600000) {
     therapyDuration = 1200000;
-    Serial.println("THERAPY TIMER: 20 MIN");
   } else if (therapyDuration == 1200000) {
     therapyDuration = 300000;
-    Serial.println("THERAPY TIMER: 5 MIN");
   } else {
     therapyDuration = 600000;
-    Serial.println("THERAPY TIMER: 10 MIN");
   }
   patternsInitialized = false;
 }
@@ -437,12 +422,6 @@ void initializePatternSequence() {
 
   for (int i = 1; i < totalPatterns; i++) {
     patternSequence[i] = random(1, PATTERN_COUNT);
-  }
-
-  Serial.printf("Pattern sequence initialized: %d patterns\n", totalPatterns);
-  for (int i = 0; i < totalPatterns; i++) {
-    Serial.printf("  Pattern %d: %s\n", i + 1,
-                  PATTERN_NAMES[patternSequence[i]]);
   }
 }
 
@@ -737,9 +716,6 @@ void handleTherapy(unsigned long now) {
         patternsInitialized = false;
         return;
       }
-
-      Serial.printf("Switching to pattern %d: %s\n", currentPatternIndex + 1,
-                    getCurrentPatternName());
     }
 
     if (currentPatternIndex < totalPatterns) {

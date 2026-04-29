@@ -288,23 +288,6 @@ void initDeviceTime() {
     loadPersistedTime();
 
     g_initialized = true;
-
-    int src = readLfclkSource();
-    const char *srcStr =
-        (src == 1) ? "XTAL (accurate, ±20 ppm)" :
-        (src == 0) ? "RC (fallback, ±250 ppm, will drift ~22s/day)" :
-                     "UNKNOWN";
-    Serial.printf("DeviceTime: RTC2 started @ %lu Hz, LFCLK=%s\n",
-                  (unsigned long)RTC2_TICKS_PER_SEC, srcStr);
-
-    if (g_status == TIME_STALE) {
-        char buf[24];
-        formatEpochUTC(g_baseEpoch, buf, sizeof(buf));
-        Serial.printf("DeviceTime: restored stale epoch=%lu (%s UTC) from flash\n",
-                      (unsigned long)g_baseEpoch, buf);
-    } else {
-        Serial.println("DeviceTime: no saved time; awaiting BLE sync");
-    }
 }
 
 void maintainDeviceTime() {
@@ -327,15 +310,7 @@ void setDeviceTime(uint32_t epochSeconds) {
         initDeviceTime();
     }
     if (epochSeconds < MIN_ACCEPTED_EPOCH || epochSeconds > MAX_ACCEPTED_EPOCH) {
-        Serial.printf("DeviceTime: rejected TIME=%lu (out of accepted range)\n",
-                      (unsigned long)epochSeconds);
         return;
-    }
-
-    uint32_t previous = getDeviceTime();
-    int32_t jumpSeconds = 0;
-    if (previous != 0) {
-        jumpSeconds = (int32_t)((int64_t)epochSeconds - (int64_t)previous);
     }
 
     g_baseTicks = readTicksRaw();
@@ -345,16 +320,6 @@ void setDeviceTime(uint32_t epochSeconds) {
 
     (void)savePersistedTime(epochSeconds, /*force=*/true);
     g_lastPersistTicks = g_baseTicks;
-
-    char buf[24];
-    formatEpochUTC(epochSeconds, buf, sizeof(buf));
-    if (previous == 0) {
-        Serial.printf("DeviceTime: synced epoch=%lu (%s UTC) [first sync]\n",
-                      (unsigned long)epochSeconds, buf);
-    } else {
-        Serial.printf("DeviceTime: synced epoch=%lu (%s UTC) [jump=%+lds]\n",
-                      (unsigned long)epochSeconds, buf, (long)jumpSeconds);
-    }
 }
 
 uint32_t getDeviceTime() {
