@@ -272,6 +272,31 @@ static void finalizeTrainingRecord() {
     Serial.printf ("  Slouches: %u  Corrections: %u%s\n",
                    (unsigned)slouchCount, (unsigned)correctionCount,
                    eventBufferOverflowed ? " (truncated)" : "");
+
+    {
+        const uint16_t printLimit = 16;
+        uint16_t printed = 0;
+        for (uint16_t i = 0; i < slouchCount && printed < printLimit; i++, printed++) {
+            uint16_t s = slouchBuf[i];
+            Serial.printf("  Event %u: Slouched at %um %02us",
+                          (unsigned)(i + 1),
+                          (unsigned)(s / 60), (unsigned)(s % 60));
+            if (i < correctionCount) {
+                uint16_t c = correctionBuf[i];
+                Serial.printf(" -> Corrected at %um %02us (held %us)",
+                              (unsigned)(c / 60), (unsigned)(c % 60),
+                              (unsigned)(c > s ? (c - s) : 0));
+            } else {
+                Serial.print(" -> not corrected");
+            }
+            Serial.println();
+        }
+        if (slouchCount > printLimit) {
+            Serial.printf("  ... (%u more events not printed)\n",
+                          (unsigned)(slouchCount - printLimit));
+        }
+    }
+
     Serial.printf ("  Total stored sessions: %lu\n",
                    (unsigned long)state.trainingSessionCount);
     Serial.println("========================================");
@@ -369,6 +394,29 @@ static void finalizeTherapyRecord() {
     Serial.printf ("  Duration : %u min\n", (unsigned)therapySubMode);
     Serial.printf ("  Patterns : %u unique / %u total\n",
                    (unsigned)uniquePatterns, (unsigned)totalPatterns);
+
+    {
+        uint8_t printSeq[MAX_THERAPY_PATTERNS];
+        int printLen = getTherapyPatternSequence(printSeq, MAX_THERAPY_PATTERNS);
+        if (printLen > 0) {
+            // Firmware plays each pattern for exactly 60s except possibly the
+            // final one, which gets the remainder of the session duration.
+            for (int i = 0; i < printLen; i++) {
+                uint32_t patDur = 60u;
+                if (i == printLen - 1) {
+                    uint32_t consumed = 60u * (uint32_t)(printLen - 1);
+                    patDur = (durationSec > consumed) ? (durationSec - consumed) : 0u;
+                    if (patDur == 0u) patDur = (uint32_t)(durationSec % 60u);
+                    if (patDur == 0u) patDur = 60u;
+                }
+                Serial.printf("  Pattern %d: %-18s (%lus)\n",
+                              i + 1,
+                              getPatternNameByIndex((int)printSeq[i]),
+                              (unsigned long)patDur);
+            }
+        }
+    }
+
     Serial.printf ("  Total stored sessions: %lu\n",
                    (unsigned long)state.therapySessionCount);
     Serial.println("========================================");
