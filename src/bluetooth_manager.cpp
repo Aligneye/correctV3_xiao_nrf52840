@@ -290,19 +290,18 @@ static void onBleConnect(uint16_t) {
 
   playButtonFeedback(); // Feedback on connect
 
-  // Kick off session sync. We defer the actual notify by a few hundred ms
-  // so the CCCD write for session-data has a chance to land first; if the
-  // app hasn't subscribed yet, the notify will silently no-op and we'll
-  // retry from ACKs or the next reconnect.
+  // Do not send SESSION_DATA from the connect callback. At this point the
+  // phone usually has not discovered services or enabled the CCCD yet, so
+  // notify() can fail and the first offline session is missed. The app starts
+  // sync by writing SESSION_SYNC_START (0xFF) after it subscribes.
   _syncIndex = 0;
+  _lastSentFileIndex = -1;
   _extPacketIndex = 0;
   _extPacketTotal = 0;
   _awaitingExtAck = false;
   int unsent = session_log_count_unsent();
-  Serial.printf("BLE SYNC: connect with %d unsent session(s)\n", unsent);
-  if (unsent > 0) {
-    _sendNextSession();
-  } else {
+  Serial.printf("BLE SYNC: connect with %d unsent session(s), waiting for app start\n", unsent);
+  if (unsent <= 0) {
     // Opportunistic cleanup so the file doesn't keep growing with
     // sent-but-unpurged rows across reconnects.
     session_log_purge_sent();
@@ -599,13 +598,8 @@ void notifyNewSessionStored() {
   int unsent = session_log_count_unsent();
   if (unsent <= 0) return;
   Serial.printf("BLE SYNC: new session stored while connected, unsent=%d\n", unsent);
-  // The app will re-trigger sync on the next connect or the app can write
-  // 0xFF to SESSION_ACK to restart. We kick off _sendNextSession() only if
-  // no sync is already in progress (no pending ACK outstanding).
-  if (_lastSentFileIndex < 0 && !_awaitingExtAck) {
-    _syncIndex = 0;
-    _sendNextSession();
-  }
+  // The app re-triggers sync by writing 0xFF to SESSION_ACK after it has
+  // subscribed to SESSION_DATA. Sending here can race the phone's listener.
 }
 
 void sendBLE() {
